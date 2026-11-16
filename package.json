@@ -1,0 +1,41 @@
+{
+  "name": "omsg",
+  "version": "1.0.0",
+  "description": "OmO agents for OpenCode version 2.",
+  "keywords": [
+    "omsg",
+    "omo",
+    "opencode",
+    "typescript",
+    "coding-agent"
+  ],
+  "homepage": "https://github.com/iworkforces/oh-my-sago#readme",
+  "bugs": {
+    "url": "https://github.com/iworkforces/oh-my-sago/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/iworkforces/oh-my-sago.git"
+  },
+  "license": "MIT",
+  "author": "KennyDizi <chitrung09t2@gmail.com>",
+  "type": "module",
+  "main": "index.ts",
+  "scripts": {
+    "test": "test"
+  },
+  "dependencies": {
+    "@opencode/cli": "2.3.0",
+    "@opencode/plugin": "^2.3.0",
+    "@opencode/sdk": "^2.3.0",
+    "@opentui/core": "^0.9.1",
+    "@opentui/keymap": "^0.9.1",
+    "@opentui/solid": "^0.9.1",
+    "oh-my-openagent": "^5.1.72",
+    "oh-my-opencode": "^5.1.72"
+  },
+  "devDependencies": {
+    "@tsconfig/node26": "^26.0.2",
+    "@types/node": "26.6.6"
+  }
+}

@@ -1,2 +1,3 @@
-# omo-opencode-v2
-OmO agents support OpenCode v2.
+# oh-my-sago
+
+OmO agents for OpenCode version 2.
