@@ -1,7 +1,7 @@
 {
   "name": "omsg",
   "version": "1.0.0",
-  "description": "OmO agents for OpenCode version 2.",
+  "description": "It codes like a SWEE would, another lobster way 🦞",
   "keywords": [
     "omsg",
     "omo",
@@ -28,11 +28,11 @@
     "@opencode/cli": "2.3.0",
     "@opencode/plugin": "^2.3.0",
     "@opencode/sdk": "^2.3.0",
-    "@opentui/core": "^0.9.1",
-    "@opentui/keymap": "^0.9.1",
-    "@opentui/solid": "^0.9.1",
-    "oh-my-openagent": "^5.1.72",
-    "oh-my-opencode": "^5.1.72"
+    "@opentui/core": "^0.9.2",
+    "@opentui/keymap": "^0.9.2",
+    "@opentui/solid": "^0.9.2",
+    "oh-my-openagent": "^5.1.73",
+    "oh-my-opencode": "^5.1.73"
   },
   "devDependencies": {
     "@tsconfig/node26": "^26.0.2",

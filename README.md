@@ -1,3 +1,3 @@
 # oh-my-sago
 
-Code like a SWEE would.
+It codes like a SWEE would, another lobster way 🦞
