@@ -87,7 +87,13 @@ const records = z
               type: z.string(),
               name: z.string().optional(),
               text: z.string().optional(),
-              state: z.object({ status: z.string(), content: z.unknown().optional() }).optional(),
+              state: z
+                .object({
+                  status: z.string(),
+                  content: z.unknown().optional(),
+                  metadata: z.object({ name: z.string().optional() }).optional(),
+                })
+                .optional(),
             }),
           )
           .optional(),
@@ -101,6 +107,11 @@ assert.ok(
     (part) => part.type === "tool" && part.name === "skill" && part.state?.status === "completed",
   ),
   JSON.stringify(records),
+);
+assert.equal(
+  parts.find((part) => part.type === "tool" && part.name === "skill")?.state?.metadata?.name,
+  "git-master",
+  "Completed skills must provide the name used by the native TUI.",
 );
 assert.ok(
   parts.some((part) => part.type === "text" && part.text === "omsg ready"),
