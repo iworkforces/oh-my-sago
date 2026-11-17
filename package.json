@@ -21,6 +21,7 @@
   },
   "files": [
     "dist",
+    "scripts/postinstall.mjs",
     "README.md",
     "LICENSE"
   ],
@@ -38,6 +39,7 @@
     }
   },
   "scripts": {
+    "postinstall": "node ./scripts/postinstall.mjs",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "build": "tsc -p tsconfig.build.json",
