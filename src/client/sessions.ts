@@ -21,7 +21,10 @@ export function sessionStatus(session: SessionInfo): SessionStatus {
     : { type: "idle" };
 }
 
-export async function listSessions(context: Plugin.Context, request: Request): Promise<SessionInfo[]> {
+export async function listSessions(
+  context: Plugin.Context,
+  request: Request,
+): Promise<SessionInfo[]> {
   const directory = new URL(request.url).searchParams.get("directory") ?? undefined;
   const sessions: SessionInfo[] = [];
   let cursor: string | undefined;

@@ -1,6 +1,9 @@
 export class BridgeError extends Error {
   override readonly name = "BridgeError";
-  constructor(readonly status: number, message: string) {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
     super(message);
   }
 }
