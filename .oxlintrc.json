@@ -39,7 +39,7 @@
       "rules": { "programming/no-em-dash-copy": "off" }
     },
     {
-      "files": ["src/index.ts", "lint/oxlint-plugin/*.js"],
+      "files": ["src/index.ts", "tests/fixtures/*-plugin/index.ts", "lint/oxlint-plugin/*.js"],
       "rules": { "import/no-default-export": "off" }
     }
   ]
