@@ -36,16 +36,16 @@ export function legacyName(name: string): string {
 
 export function legacyArguments(name: string, input: unknown): unknown {
   const alias = legacyName(name);
-  if (!["read", "write", "edit"].includes(alias) || name === alias) return input;
+  if (!["read", "write", "edit"].includes(alias)) return input;
   const args = z.record(z.string(), z.unknown()).parse(input);
   const { path, ...rest } = args;
-  return { ...rest, filePath: path };
+  return { ...rest, ...(path === undefined ? {} : { filePath: path }) };
 }
 
 export function nativeArguments(name: string, input: unknown): unknown {
   const alias = legacyName(name);
-  if (!["read", "write", "edit"].includes(alias) || name === alias) return input;
+  if (!["read", "write", "edit"].includes(alias)) return input;
   const args = z.record(z.string(), z.unknown()).parse(input);
   const { filePath, ...rest } = args;
-  return { ...rest, path: filePath };
+  return { ...rest, ...(filePath === undefined ? {} : { path: filePath }) };
 }
