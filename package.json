@@ -3,40 +3,64 @@
   "version": "1.0.0",
   "description": "It codes like a SWEE would, another lobster way 🦞",
   "keywords": [
-    "omsg",
+    "coding-agent",
     "omo",
+    "omsg",
     "opencode",
-    "typescript",
-    "coding-agent"
+    "typescript"
   ],
   "homepage": "https://github.com/iworkforces/oh-my-sago#readme",
   "bugs": {
     "url": "https://github.com/iworkforces/oh-my-sago/issues"
   },
+  "license": "MIT",
+  "author": "KennyDizi <chitrung09t2@gmail.com>",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/iworkforces/oh-my-sago.git"
   },
-  "license": "MIT",
-  "author": "KennyDizi <chitrung09t2@gmail.com>",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "type": "module",
-  "main": "index.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./server": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
   "scripts": {
-    "test": "test"
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json",
+    "lint": "oxlint --type-aware --deny-warnings",
+    "format:check": "oxfmt --check"
   },
   "dependencies": {
-    "@opencode/cli": "2.3.0",
-    "@opencode/plugin": "^2.3.0",
-    "@opencode/sdk": "^2.3.0",
-    "@opentui/core": "^0.9.2",
-    "@opentui/keymap": "^0.9.2",
-    "@opentui/solid": "^0.9.2",
-    "oh-my-openagent": "^5.1.75",
-    "oh-my-opencode": "^5.1.75"
+    "@opencode/plugin": "2.3.0",
+    "oh-my-openagent": "5.1.75",
+    "zod": "4.6.7"
   },
   "devDependencies": {
-    "@tsconfig/node26": "^26.0.2",
+    "@opencode-ai/plugin": "1.18.31",
+    "@opencode-ai/sdk": "1.18.31",
+    "@opencode/cli": "2.3.0",
+    "@opencode/sdk": "2.3.0",
+    "@tsconfig/node26": "26.0.2",
+    "@types/bun": "1.4.4",
     "@types/node": "26.6.6",
-    "typescript": "npm:@typescript/typescript6@^6.0.2"
-  }
+    "oxfmt": "0.74.0",
+    "oxlint": "1.89.0",
+    "oxlint-tsgolint": "7.0.2005",
+    "typescript": "6.0.2"
+  },
+  "packageManager": "bun@1.4.4"
 }
