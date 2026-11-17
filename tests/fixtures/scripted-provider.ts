@@ -1,10 +1,11 @@
-import type {
-  LanguageModelV3,
-  LanguageModelV3CallOptions,
-  LanguageModelV3GenerateResult,
-  LanguageModelV3StreamPart,
-} from "@ai-sdk/provider";
+import type { AISDKHooks } from "@opencode/plugin/promise/aisdk";
 import { Model, Plugin, Provider } from "@opencode/plugin";
+import { assertNever } from "../../src/client/errors.js";
+
+type LanguageModelV3 = NonNullable<AISDKHooks["language"]["language"]>;
+type LanguageModelV3CallOptions = Parameters<LanguageModelV3["doGenerate"]>[0];
+type LanguageModelV3GenerateResult = Awaited<ReturnType<LanguageModelV3["doGenerate"]>>;
+type LanguageModelV3StreamPart = Awaited<ReturnType<LanguageModelV3["doStream"]>>["stream"] extends ReadableStream<infer Part> ? Part : never;
 
 export type Script = (
   request: LanguageModelV3CallOptions,
@@ -52,8 +53,14 @@ export function scriptedProvider(script: Script): Plugin.Plugin {
           case "tool-call":
             parts.push(content);
             break;
-          default:
+          case "file":
+          case "reasoning":
+          case "source":
+          case "tool-approval-request":
+          case "tool-result":
             throw new UnsupportedScriptContent(content.type);
+          default:
+            assertNever(content);
         }
       }
       parts.push({
@@ -77,7 +84,8 @@ export function scriptedProvider(script: Script): Plugin.Plugin {
       await context.provider.transform((editor) => {
         editor.add({
           info: {
-            ...Provider.Info.empty(providerID),
+            id: providerID,
+            name: providerID,
             activation: "enabled",
             package: "aisdk:omsg-test",
           },

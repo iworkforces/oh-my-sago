@@ -1,0 +1,84 @@
+import assert from "node:assert/strict";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { z } from "zod";
+
+const require = createRequire(import.meta.url);
+
+export async function cliHost(directory: string, plugins: readonly string[] = [fileURLToPath(new URL("./domain-plugin/", import.meta.url))]) {
+  const platform = process.platform === "win32" ? "windows" : process.platform;
+  const manifest = require.resolve(`@opencode/cli-${platform}-${process.arch}/package.json`);
+  const executable = join(dirname(manifest), "bin", process.platform === "win32" ? "opencode.exe" : "opencode");
+  const version = Bun.spawn([executable, "--version"], { env: process.env, stdout: "pipe", stderr: "pipe" });
+  const runtime = (await new Response(version.stdout).text()).trim();
+  assert.equal(await version.exited, 0);
+  assert.equal(runtime, "opencode v2.3.0");
+  const config = join(directory, "opencode.json");
+  await Bun.write(config, JSON.stringify({
+    plugins,
+    model: "omsg-test/scripted",
+  }));
+  const password = crypto.randomUUID();
+  const child = Bun.spawn([executable, "--print-logs", "--log-level", "warn", "serve", "--stdio", "--hostname", "127.0.0.1", "--port", "0"], {
+    cwd: directory,
+    env: {
+      ...process.env,
+      OPENCODE_CONFIG: config,
+      OPENCODE_CONFIG_DIR: dirname(config),
+      OPENCODE_DISABLE_PROJECT_CONFIG: "1",
+      OPENCODE_DISABLE_CLAUDE_CODE: "1",
+      OPENCODE_DISABLE_MODELS_FETCH: "1",
+      OPENCODE_DISABLE_AUTOUPDATE: "1",
+      OPENCODE_DISABLE_FILEWATCHER: "1",
+      OPENCODE_DISABLE_FFF: "1",
+      OPENCODE_SERVER_PASSWORD: password,
+    },
+    stdin: "pipe", stdout: "pipe", stderr: "pipe", timeout: 90_000,
+  });
+  const stderr = new Response(child.stderr).text();
+  const reader = child.stdout.getReader();
+  const decoder = new TextDecoder();
+  const stop = async () => {
+    await child.stdin.end();
+    if (child.exitCode === null) child.kill();
+    const exitCode = await child.exited;
+    await reader.cancel();
+    console.error(JSON.stringify({ cli: runtime, pid: child.pid, exitCode, teardown: "process exited; stdio closed" }));
+    const logs = await stderr;
+    if (logs) console.error(logs);
+  };
+  try {
+    let output = "";
+    let address: string | undefined;
+    while (address === undefined) {
+      const chunk = await reader.read();
+      assert.equal(chunk.done, false, `CLI exited before listening: ${output}\n${await (chunk.done ? stderr : Promise.resolve(""))}`);
+      output += decoder.decode(chunk.value, { stream: true });
+      for (const line of output.split("\n").slice(0, -1)) {
+        if (line.startsWith("{")) address = z.object({ url: z.url() }).parse(JSON.parse(line)).url;
+      }
+    }
+    const base = address;
+    return {
+      runtime,
+      async request(path: string, body?: unknown) {
+        const url = new URL(path, base);
+       url.searchParams.set("location[directory]", directory);
+        const response = await fetch(url, {
+          method: body === undefined ? "GET" : "POST",
+          headers: { authorization: `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`, "content-type": "application/json" },
+          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+          signal: AbortSignal.timeout(60_000),
+        });
+        const text = await response.text();
+        assert.ok(response.ok, `${response.status} ${url.pathname}: ${text}`);
+        return text ? JSON.parse(text) : undefined;
+      },
+      async [Symbol.asyncDispose]() { await stop(); },
+    };
+  } catch (error) {
+    await stop();
+    throw error;
+  }
+}
