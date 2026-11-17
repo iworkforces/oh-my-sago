@@ -3,15 +3,28 @@ import type { Plugin } from "@opencode/plugin";
 import type { Info } from "@opencode/plugin/promise/tool";
 import { z } from "zod";
 import { inputSchema, legacyArguments, legacyName, metadata, nativeArguments } from "./value.js";
+import { nativeAction } from "./permissions.js";
 
-export async function prepareTools(context: Plugin.Context, hooks: Hooks): Promise<readonly Info[]> {
+export async function prepareTools(
+  context: Plugin.Context,
+  hooks: Hooks,
+): Promise<readonly Info[]> {
   const tools: Info[] = [];
   for (const [name, definition] of Object.entries(hooks.tool ?? {})) {
     const schema = z.object(definition.args);
+    const descriptionArgs = Object.fromEntries(
+      Object.entries(definition.args).map(([key, argument]) => {
+        const original = z.instanceof(z.ZodType).parse(argument);
+        const copy = z.clone(original, original.def);
+        const meta = z.globalRegistry.get(original);
+        if (meta !== undefined) z.globalRegistry.add(copy, meta);
+        return [key, copy];
+      }),
+    );
     tools.push({
       name,
       description: definition.description,
-      input: z.toJSONSchema(schema),
+      input: z.toJSONSchema(z.object(descriptionArgs), { io: "input" }),
       output: { type: "string" },
       options: { codemode: false },
       async execute(input: unknown, call) {
@@ -31,7 +44,7 @@ export async function prepareTools(context: Plugin.Context, hooks: Hooks): Promi
             await context.permission.assert({
               sessionID: call.sessionID,
               agent: call.agent,
-              action: request.permission,
+              action: nativeAction(request.permission),
               resources: request.patterns,
               save: request.always,
               metadata: metadata(request.metadata),
@@ -60,8 +73,18 @@ export async function prepareTools(context: Plugin.Context, hooks: Hooks): Promi
   const definitions = [...(await context.tool.list()), ...tools];
   const prepared: Info[] = [];
   for (const definition of definitions) {
-    const output = { description: definition.description, parameters: inputSchema(definition.input) };
-    await hooks["tool.definition"]?.({ toolID: legacyName("id" in definition ? definition.id : definition.name) }, output);
+    const output = {
+      description: definition.description,
+      parameters: inputSchema(definition.input),
+    };
+    await hooks["tool.definition"]?.(
+      {
+        toolID: legacyName(
+          "id" in definition && typeof definition.id === "string" ? definition.id : definition.name,
+        ),
+      },
+      output,
+    );
     prepared.push({ ...definition, description: output.description, input: output.parameters });
   }
   return prepared;
@@ -89,7 +112,8 @@ export async function registerTools(
       const name = event.tool;
       const output = { args: legacyArguments(name, event.input) };
       await hooks["tool.execute.before"]?.(
-        { tool: legacyName(name), sessionID: event.sessionID, callID: event.id }, output,
+        { tool: legacyName(name), sessionID: event.sessionID, callID: event.id },
+        output,
       );
       event.input = nativeArguments(name, output.args);
     });
@@ -97,19 +121,39 @@ export async function registerTools(
     const after = await context.tool.hook("execute.after", async (event) => {
       if (event.status === "error") return;
       const content = event.result.content;
-      const text = typeof content === "string" ? content : (content ?? []).flatMap((part) => part.type === "text" ? [part.text] : []).join("\n");
+      const text =
+        typeof content === "string"
+          ? content
+          : (content ?? []).flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");
       const output = {
-        title: typeof event.result.metadata?.["title"] === "string" ? event.result.metadata["title"] : "",
+        title:
+          typeof event.result.metadata?.["title"] === "string"
+            ? event.result.metadata["title"]
+            : "",
         output: text,
         metadata: { ...event.result.metadata },
       };
-      await hooks["tool.execute.after"]?.({ tool: legacyName(event.tool), sessionID: event.sessionID, callID: event.id, args: legacyArguments(event.tool, event.input) }, output);
-      const changedContent = output.output === text ? content : [
-        { type: "text" as const, text: output.output },
-        ...(typeof content === "string" ? [] : (content ?? []).filter((part) => part.type !== "text")),
-      ];
+      await hooks["tool.execute.after"]?.(
+        {
+          tool: legacyName(event.tool),
+          sessionID: event.sessionID,
+          callID: event.id,
+          args: legacyArguments(event.tool, event.input),
+        },
+        output,
+      );
+      const changedContent =
+        output.output === text
+          ? content
+          : [
+              { type: "text" as const, text: output.output },
+              ...(typeof content === "string"
+                ? []
+                : (content ?? []).filter((part) => part.type !== "text")),
+            ];
       event.result = {
         ...event.result,
+        ...(typeof event.result.output === "string" ? { output: output.output } : {}),
         ...(changedContent === undefined ? {} : { content: changedContent }),
         metadata: metadata({ ...output.metadata, title: output.title }),
       };
