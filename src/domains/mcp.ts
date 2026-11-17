@@ -1,0 +1,79 @@
+import type { Config } from "@opencode-ai/sdk";
+import { Mcp, type Plugin } from "@opencode/plugin";
+import { z } from "zod";
+import { CompatibilityError } from "./value.js";
+
+export async function registerMcp(context: Plugin.Context, config: Config) {
+  const servers = Object.entries(config.mcp ?? {}).map(([name, server]) => {
+    if (server.type === undefined) {
+      return { name, toggle: z.object({ enabled: z.boolean() }).strict().parse(server).enabled };
+    }
+    const { enabled, timeout } = server;
+    const common = {
+      ...(enabled === undefined ? {} : { disabled: !enabled }),
+      ...(timeout === undefined
+        ? {}
+        : {
+            timeout: new Mcp.TimeoutConfig({
+              startup: timeout,
+              catalog: timeout,
+              execution: timeout,
+            }),
+          }),
+    };
+    switch (server.type) {
+      case "local":
+        return {
+          name,
+          definition: new Mcp.LocalConfig({
+            type: "local",
+            command: server.command,
+            ...common,
+            ...(server.environment === undefined ? {} : { environment: server.environment }),
+          }),
+        };
+      case "remote": {
+        const oauth = server.oauth;
+        return {
+          name,
+          definition: new Mcp.RemoteConfig({
+            type: "remote",
+            url: server.url,
+            ...common,
+            ...(server.headers === undefined ? {} : { headers: server.headers }),
+            ...(oauth === undefined
+              ? {}
+              : {
+                  oauth:
+                    oauth === false
+                      ? false
+                      : new Mcp.OAuthConfig({
+                          ...(oauth.clientId === undefined ? {} : { client_id: oauth.clientId }),
+                          ...(oauth.clientSecret === undefined
+                            ? {}
+                            : { client_secret: oauth.clientSecret }),
+                          ...(oauth.scope === undefined ? {} : { scope: oauth.scope }),
+                        }),
+                }),
+          }),
+        };
+      }
+      default:
+        throw new CompatibilityError(`MCP ${name} has an unsupported type`);
+    }
+  });
+  return context.mcp.transform((editor) => {
+    for (const server of servers) {
+      if ("toggle" in server) {
+        if (editor.get(server.name) === undefined) {
+          if (server.toggle)
+            throw new CompatibilityError(`MCP ${server.name} has no definition to enable`);
+          continue;
+        }
+        editor.update(server.name, (entry) => {
+          entry.disabled = !server.toggle;
+        });
+      } else editor.set(server.name, server.definition);
+    }
+  });
+}

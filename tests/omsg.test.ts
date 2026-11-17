@@ -1,0 +1,8 @@
+import { expect, test } from "bun:test";
+import { runScenario } from "./fixtures/run-scenario.js";
+
+test("the real OmO factory runs its agent and skill tool on OpenCode 2.3.0", async () => {
+  const result = await runScenario("./omsg-scenario.ts");
+  expect(result.exitCode, result.stderr).toBe(0);
+  expect(JSON.parse(result.stdout)).toEqual({ activation: "passed", turn: "passed", skill: "passed", delegation: "passed", background: "passed", failure: "passed", cancellation: "passed", guard: "passed", lifecycle: "passed" });
+}, 110_000);
