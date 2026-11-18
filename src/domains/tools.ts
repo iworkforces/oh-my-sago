@@ -30,7 +30,8 @@ export async function prepareTools(
       async execute(input: unknown, call) {
         call.signal.throwIfAborted();
         const progress: Promise<void>[] = [];
-        const result = await definition.execute(schema.parse(input), {
+        const args = schema.parse(input);
+        const result = await definition.execute(args, {
           sessionID: call.sessionID,
           messageID: call.messageID,
           agent: call.agent,
@@ -53,7 +54,9 @@ export async function prepareTools(
           },
         });
         await Promise.all(progress);
-        if (typeof result === "string") return { output: result, content: result, metadata: {} };
+        const resultMetadata = name === "skill" ? metadata({ name: args["name"] }) : {};
+        if (typeof result === "string")
+          return { output: result, content: result, metadata: resultMetadata };
         return {
           output: result.output,
           content: [
@@ -65,7 +68,7 @@ export async function prepareTools(
               ...(file.filename === undefined ? {} : { name: file.filename }),
             })),
           ],
-          metadata: metadata({ ...result.metadata, title: result.title }),
+          metadata: metadata({ ...resultMetadata, ...result.metadata, title: result.title }),
         };
       },
     });

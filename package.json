@@ -1,6 +1,6 @@
 {
   "name": "omsg",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "It codes like a SWEE would, another lobster way 🦞",
   "keywords": [
     "coding-agent",
@@ -36,6 +36,10 @@
     "./server": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./tui": {
+      "types": "./dist/tui.d.ts",
+      "import": "./dist/tui.js"
     }
   },
   "scripts": {
@@ -48,17 +52,17 @@
   },
   "dependencies": {
     "@opencode-ai/sdk": "1.19.6",
-    "@opencode/plugin": "2.3.0",
+    "@opencode/plugin": "2.3.1",
     "oh-my-openagent": "5.1.75",
     "zod": "4.6.7"
   },
   "devDependencies": {
-    "@ai-sdk/provider": "4.0.38",
+    "@ai-sdk/provider": "4.0.39",
     "@opencode-ai/plugin": "1.19.6",
-    "@opencode/ai": "2.3.0",
-    "@opencode/cli": "2.3.0",
-    "@opencode/schema": "2.3.0",
-    "@opencode/sdk": "2.3.0",
+    "@opencode/ai": "2.3.1",
+    "@opencode/cli": "2.3.1",
+    "@opencode/schema": "2.3.1",
+    "@opencode/sdk": "2.3.1",
     "@tsconfig/node26": "26.0.2",
     "@types/bun": "1.4.4",
     "@types/node": "26.6.6",
@@ -66,7 +70,7 @@
     "oxfmt": "0.79.0",
     "oxlint": "1.94.0",
     "oxlint-tsgolint": "7.0.2007",
-    "typescript": "6.0.2"
+    "typescript": "7.0.2"
   },
   "peerDependencies": {
     "effect": "4.1.0"
