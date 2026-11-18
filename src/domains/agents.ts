@@ -1,6 +1,7 @@
 import type { Config } from "@opencode-ai/sdk";
 import { Agent, Model, type Plugin } from "@opencode/plugin";
 import { z } from "zod";
+import { PermissionEffect } from "../enums.js";
 import { nativePermissions } from "./permissions.js";
 
 const extras = z.object({
@@ -50,7 +51,7 @@ export async function registerAgents(context: Plugin.Context, config: Config) {
             Object.fromEntries(
               Object.entries(definition.tools ?? {}).map(([tool, enabled]) => [
                 tool,
-                enabled ? "allow" : "deny",
+                enabled ? PermissionEffect.Allow : PermissionEffect.Deny,
               ]),
             ),
           ),
