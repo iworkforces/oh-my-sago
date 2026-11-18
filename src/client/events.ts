@@ -53,7 +53,7 @@ export function clientEvents(context: Plugin.Context) {
       const first = iterator.next();
       const seeded = listSessions(
         context,
-        new Request("http://omsg.invalid/session", { signal }),
+        new Request("http://omsago.invalid/session", { signal }),
       ).then((records) => {
         for (const session of records) sessions.set(session.id, session);
       });

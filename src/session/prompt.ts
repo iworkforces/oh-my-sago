@@ -117,10 +117,10 @@ export async function transformPrompt(
     });
   }
   if (updated.system !== undefined || updated.tools !== undefined) {
-    const overrides = promptOverrides.parse(event.metadata?.["omsg.client"] ?? {});
+    const overrides = promptOverrides.parse(event.metadata?.["omsago.client"] ?? {});
     event.metadata = {
       ...event.metadata,
-      "omsg.client": {
+      "omsago.client": {
         ...overrides,
         ...(updated.system === undefined ? {} : { system: updated.system }),
         ...(updated.tools === undefined ? {} : { tools: updated.tools }),

@@ -57,7 +57,7 @@ async function markdown(file: { readonly path: string; readonly canonical: strin
     };
   } catch (error) {
     if (!(error instanceof SyntaxError || error instanceof z.ZodError)) throw error;
-    console.warn("omsg: Skipping Markdown with invalid frontmatter", { path: file.path });
+    console.warn("omsago: Skipping Markdown with invalid frontmatter", { path: file.path });
     return undefined;
   }
 }

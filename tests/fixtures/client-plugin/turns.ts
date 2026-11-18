@@ -60,7 +60,7 @@ export async function verifyTurns(
 
   const compacted = await client.session.summarize({
     path: { id: success.id },
-    body: { providerID: "omsg-test", modelID: "scripted" },
+    body: { providerID: "omsago-test", modelID: "scripted" },
   });
   assert.equal(compacted.data, true, JSON.stringify(compacted.error));
   const compactedHistory = await context.session.context({ sessionID: success.id });
@@ -80,7 +80,7 @@ export async function verifyTurns(
   assert.ok((await client.session.prompt({ path: { id: invalid.id }, body: invalidPrompt })).data);
   const rejected = await client.session.summarize({
     path: { id: invalid.id },
-    body: { providerID: "omsg-test", modelID: "scripted" },
+    body: { providerID: "omsago-test", modelID: "scripted" },
   });
   assert.equal(rejected.response.status, 500);
   assert.match(JSON.stringify(rejected.error), /summary did not match the required template/);

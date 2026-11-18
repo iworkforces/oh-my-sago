@@ -42,12 +42,12 @@ export class ClientSessionState {
   apply(event: SessionContext): void {
     const stored = event.messages.findLast(
       (message) =>
-        message.role === MessageRole.User && message.metadata?.["omsg.client"] !== undefined,
+        message.role === MessageRole.User && message.metadata?.["omsago.client"] !== undefined,
     );
     const overrides =
       stored === undefined
         ? this.#pending.get(event.sessionID)
-        : promptOverrides.parse(stored.metadata?.["omsg.client"]);
+        : promptOverrides.parse(stored.metadata?.["omsago.client"]);
     if (overrides === undefined) return;
     if (overrides.system !== undefined)
       event.system.push({ type: ContentKind.Text, text: overrides.system });

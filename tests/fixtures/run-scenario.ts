@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export async function runScenario(script: string) {
-  const root = await mkdtemp(join(tmpdir(), "omsg-scenario-"));
+  const root = await mkdtemp(join(tmpdir(), "omsago-scenario-"));
   try {
     const names = ["home", "workspace", "config", "cache", "data", "state", "tmp"];
     await Promise.all(names.map((name) => mkdir(join(root, name))));

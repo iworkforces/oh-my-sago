@@ -209,7 +209,7 @@ export async function transformMessages(event: SessionRequest, hooks: Hooks): Pr
     }
   const output: { messages: RecordMessage[] } = {
     messages: event.messages.map((native, index) => {
-      const id = native.id ?? `omsg:request:${index}`;
+      const id = native.id ?? `omsago:request:${index}`;
       messages.set(id, native);
       const base = { id, sessionID: event.sessionID, time: { created: 0 } };
       const info: LegacyMessage =
@@ -237,7 +237,7 @@ export async function transformMessages(event: SessionRequest, hooks: Hooks): Pr
           const result = part.type === ContentKind.ToolCall ? results.get(part.id) : undefined;
           const projected = project(
             part,
-            { id: `omsg:request:${index}:${partIndex}`, sessionID: event.sessionID, messageID: id },
+            { id: `omsago:request:${index}:${partIndex}`, sessionID: event.sessionID, messageID: id },
             result,
           );
           parts.set(projected.id, {

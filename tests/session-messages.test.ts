@@ -18,7 +18,7 @@ import { transformMessages } from "../src/session/messages.js";
 function request(messages: SessionRequest["messages"]): SessionRequest {
   return {
     sessionID: Session.ID.make("ses_history"),
-    model: Model.Ref.parse("omsg-test/scripted"),
+    model: Model.Ref.parse("omsago-test/scripted"),
     messages,
     system: [],
     options: {},

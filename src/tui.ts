@@ -1,7 +1,7 @@
 import { Plugin } from "@opencode/plugin/tui";
 
 export default Plugin.define({
-  id: "omsg",
+  id: "omsago",
   setup(context) {
     const toast = () =>
       context.ui.toast.show({

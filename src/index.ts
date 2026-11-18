@@ -6,7 +6,7 @@ import { registerSessions } from "./session/index.js";
 import { registerUserDiscovery } from "./user-discovery.js";
 
 export default Plugin.define({
-  id: "omsg",
+  id: "omsago",
   async setup(context) {
     const bridge = createClientBridge(context);
     await using stack = new AsyncDisposableStack();

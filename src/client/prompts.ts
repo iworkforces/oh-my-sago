@@ -164,7 +164,7 @@ export function promptRoutes(context: Plugin.Context, state: ClientSessionState)
         files,
         agents,
         ...(input.messageID === undefined ? {} : { id: input.messageID }),
-        metadata: { "omsg.client": metadata(overrides) },
+        metadata: { "omsago.client": metadata(overrides) },
         resume: input.noReply !== true,
       },
       options,

@@ -5,8 +5,8 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { PartKind, ToolStateStatus } from "../../src/enums.js";
 import { cliHost } from "./cli-host.js";
-import { verifyDelegation } from "./omsg-delegation.js";
-import { verifyGuard, verifyLifecycle } from "./omsg-lifecycle.js";
+import { verifyDelegation } from "./omsago-delegation.js";
+import { verifyGuard, verifyLifecycle } from "./omsago-lifecycle.js";
 
 const directory = process.argv[2];
 assert.ok(directory);
@@ -34,7 +34,7 @@ await Bun.write(
           "prometheus",
           "atlas",
           "multimodal-looker",
-        ].map((name) => [name, { model: "omsg-test/scripted" }]),
+        ].map((name) => [name, { model: "omsago-test/scripted" }]),
       ),
       categories: Object.fromEntries(
         [
@@ -46,12 +46,12 @@ await Bun.write(
           "unspecified-low",
           "unspecified-high",
           "writing",
-        ].map((name) => [name, { model: "omsg-test/scripted" }]),
+        ].map((name) => [name, { model: "omsago-test/scripted" }]),
       ),
     },
   }),
 );
-const sources = ["./provider-plugin/", "./omsg-plugin/"].map((path) =>
+const sources = ["./provider-plugin/", "./omsago-plugin/"].map((path) =>
   fileURLToPath(new URL(path, import.meta.url)),
 );
 await using host = await cliHost(directory, sources);
@@ -72,7 +72,7 @@ const session = z.object({ data: z.object({ id: z.string() }) }).parse(
   await host.request("/api/session", {
     location: { directory },
     agent: selected.id,
-    model: { providerID: "omsg-test", id: "scripted" },
+    model: { providerID: "omsago-test", id: "scripted" },
   }),
 ).data;
 await host.request(`/api/session/${session.id}/prompt`, { text: "Load the git-master skill." });
@@ -118,7 +118,7 @@ assert.equal(
   "Completed skills must provide the name used by the native TUI.",
 );
 assert.ok(
-  parts.some((part) => part.type === PartKind.Text && part.text === "omsg ready"),
+  parts.some((part) => part.type === PartKind.Text && part.text === "omsago ready"),
   JSON.stringify(records),
 );
 const delegation = await verifyDelegation(host, selected.id);

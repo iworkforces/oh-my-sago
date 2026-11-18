@@ -12,10 +12,10 @@ test.each([
 ])(
   "postinstall initializes or preserves configuration with $name",
   async ({ directory, contents }) => {
-    const home = await mkdtemp(join(tmpdir(), "omsg-postinstall-"));
-    const config = join(home, ".omsg", "omsg.json");
+    const home = await mkdtemp(join(tmpdir(), "omsago-postinstall-"));
+    const config = join(home, ".omsago", "omsago.json");
     try {
-      if (directory) await mkdir(join(home, ".omsg"));
+      if (directory) await mkdir(join(home, ".omsago"));
       if (contents !== undefined) await writeFile(config, contents);
 
       const child = Bun.spawn([process.execPath, "run", "postinstall"], {
