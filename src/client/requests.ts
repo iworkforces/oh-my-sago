@@ -1,5 +1,6 @@
 import { PartKind, permissionEffects } from "../enums.js";
 import { z } from "zod";
+import { json } from "../domains/value.js";
 
 export const model = z.object({ providerID: z.string(), modelID: z.string() }).strict();
 export const nativeModel = z
@@ -42,7 +43,7 @@ const part = z.discriminatedUnion("type", [
       mime: z.string(),
       url: z.string(),
       filename: z.string().optional(),
-      source: z.unknown().optional(),
+      source: json.optional(),
     })
     .strict(),
   z
@@ -78,6 +79,5 @@ export const summarizeBody = z
 
 export async function body<S extends z.ZodType>(request: Request, schema: S): Promise<z.output<S>> {
   const text = await request.text();
-  const value: unknown = text.length === 0 ? {} : JSON.parse(text);
-  return schema.parse(value);
+  return schema.parse(text.length === 0 ? {} : JSON.parse(text));
 }

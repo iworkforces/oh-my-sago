@@ -2,9 +2,8 @@ import type { ContentPart, ToolResultPart } from "@opencode/ai";
 import type { SessionRequest } from "@opencode/plugin/promise/session";
 import type { Hooks } from "@opencode-ai/plugin";
 import type { Message as LegacyMessage, Part, ToolPart } from "@opencode-ai/sdk";
-import { z } from "zod";
 import { assertNever } from "../client/errors.js";
-import { legacyName } from "../domains/value.js";
+import { type JsonRecord, jsonRecord, legacyName } from "../domains/value.js";
 import {
   ContentKind,
   MediaSourceKind,
@@ -18,11 +17,14 @@ import { type Backing, restore, unsupported } from "./message-restore.js";
 
 type RequestMessage = SessionRequest["messages"][number];
 type RecordMessage = { info: LegacyMessage; parts: Part[] };
-const recordInput = z.record(z.string(), z.unknown());
-const text = (value: unknown): string =>
+type ResultValue = Exclude<
+  ToolResultPart["result"],
+  { type: typeof ToolResultKind.Content }
+>["value"];
+const text = (value: ResultValue): string =>
   typeof value === "string" ? value : (JSON.stringify(value) ?? String(value));
 
-function resultState(result: ToolResultPart, input: Record<string, unknown>): ToolPart["state"] {
+function resultState(result: ToolResultPart, input: JsonRecord): ToolPart["state"] {
   switch (result.result.type) {
     case ToolResultKind.Error:
       return {
@@ -110,7 +112,7 @@ function project(
       };
     }
     case ContentKind.ToolCall: {
-      const parsed = recordInput.safeParse(part.input);
+      const parsed = jsonRecord.safeParse(part.input);
       const input = parsed.success ? structuredClone(parsed.data) : {};
       return {
         ...identity,
@@ -237,7 +239,11 @@ export async function transformMessages(event: SessionRequest, hooks: Hooks): Pr
           const result = part.type === ContentKind.ToolCall ? results.get(part.id) : undefined;
           const projected = project(
             part,
-            { id: `omsago:request:${index}:${partIndex}`, sessionID: event.sessionID, messageID: id },
+            {
+              id: `omsago:request:${index}:${partIndex}`,
+              sessionID: event.sessionID,
+              messageID: id,
+            },
             result,
           );
           parts.set(projected.id, {

@@ -4,6 +4,7 @@ import type { Model, UserMessage } from "@opencode-ai/sdk";
 import type { Hooks, ProviderContext } from "@opencode-ai/plugin";
 import { BridgeError } from "../client/errors.js";
 import { legacyMessages } from "../client/messages.js";
+import { metadata } from "../domains/value.js";
 import { MessageRole } from "../enums.js";
 
 export async function requestContext(
@@ -24,7 +25,12 @@ export async function requestContext(
   if (selected === undefined || owner === undefined)
     throw new BridgeError(404, `Unknown model ${request.model.providerID}/${request.model.id}`);
   const cost = selected.cost.find((tier) => tier.tier === undefined);
-  const options = { ...owner.settings, ...owner.body, ...selected.settings, ...selected.body };
+  const options = metadata({
+    ...owner.settings,
+    ...owner.body,
+    ...selected.settings,
+    ...selected.body,
+  });
   const baseURL = options["baseURL"];
   const model: Model = {
     id: selected.id,

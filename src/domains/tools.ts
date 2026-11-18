@@ -2,7 +2,14 @@ import type { Hooks } from "@opencode-ai/plugin";
 import type { Plugin } from "@opencode/plugin";
 import type { Info } from "@opencode/plugin/promise/tool";
 import { z } from "zod";
-import { inputSchema, legacyArguments, legacyName, metadata, nativeArguments } from "./value.js";
+import {
+  type Json,
+  inputSchema,
+  legacyArguments,
+  legacyName,
+  metadata,
+  nativeArguments,
+} from "./value.js";
 import { nativeAction } from "./permissions.js";
 import { ToolContentKind, ToolStateStatus } from "../enums.js";
 
@@ -28,7 +35,7 @@ export async function prepareTools(
       input: z.toJSONSchema(z.object(descriptionArgs), { io: "input" }),
       output: { type: "string" },
       options: { codemode: false },
-      async execute(input: unknown, call) {
+      async execute(input: Json, call) {
         call.signal.throwIfAborted();
         const progress: Promise<void>[] = [];
         const args = schema.parse(input);
