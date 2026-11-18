@@ -4,6 +4,7 @@ import type { Info } from "@opencode/plugin/promise/tool";
 import { z } from "zod";
 import { inputSchema, legacyArguments, legacyName, metadata, nativeArguments } from "./value.js";
 import { nativeAction } from "./permissions.js";
+import { ToolContentKind, ToolStateStatus } from "../enums.js";
 
 export async function prepareTools(
   context: Plugin.Context,
@@ -60,9 +61,9 @@ export async function prepareTools(
         return {
           output: result.output,
           content: [
-            { type: "text", text: result.output },
+            { type: ToolContentKind.Text, text: result.output },
             ...(result.attachments ?? []).map((file) => ({
-              type: "file" as const,
+              type: ToolContentKind.File,
               uri: file.url,
               mime: file.mime,
               ...(file.filename === undefined ? {} : { name: file.filename }),
@@ -122,12 +123,14 @@ export async function registerTools(
     });
     registrations.push(before.dispose);
     const after = await context.tool.hook("execute.after", async (event) => {
-      if (event.status === "error") return;
+      if (event.status === ToolStateStatus.Error) return;
       const content = event.result.content;
       const text =
         typeof content === "string"
           ? content
-          : (content ?? []).flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");
+          : (content ?? [])
+              .flatMap((part) => (part.type === ToolContentKind.Text ? [part.text] : []))
+              .join("\n");
       const output = {
         title:
           typeof event.result.metadata?.["title"] === "string"
@@ -149,10 +152,10 @@ export async function registerTools(
         output.output === text
           ? content
           : [
-              { type: "text" as const, text: output.output },
+              { type: ToolContentKind.Text, text: output.output },
               ...(typeof content === "string"
                 ? []
-                : (content ?? []).filter((part) => part.type !== "text")),
+                : (content ?? []).filter((part) => part.type !== ToolContentKind.Text)),
             ];
       event.result = {
         ...event.result,

@@ -1,22 +1,23 @@
 import { Plugin } from "@opencode/plugin";
 import omsg from "../../../src/index.js";
+import { ContentKind, MessageRole } from "../../../src/enums.js";
 import { answer, scriptedProvider } from "../scripted-provider.js";
 
 const provider = scriptedProvider(async (request) => {
   const input = request.prompt
     .flatMap((message) =>
-      message.role === "user"
-        ? message.content.flatMap((part) => (part.type === "text" ? [part.text] : []))
+      message.role === MessageRole.User
+        ? message.content.flatMap((part) => (part.type === ContentKind.Text ? [part.text] : []))
         : [],
     )
     .find((text) => text.startsWith("DISCOVERY_SKILL "));
-  if (input === undefined || request.prompt.some((message) => message.role === "tool"))
+  if (input === undefined || request.prompt.some((message) => message.role === MessageRole.Tool))
     return answer("discovery complete");
   return {
     ...answer(""),
     content: [
       {
-        type: "tool-call",
+        type: ContentKind.ToolCall,
         toolCallId: "discovery-skill",
         toolName: "skill",
         input: JSON.stringify({ name: input.slice("DISCOVERY_SKILL ".length) }),

@@ -1,6 +1,6 @@
 {
   "name": "omsg",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "It codes like a SWEE would, another lobster way 🦞",
   "keywords": [
     "coding-agent",
@@ -52,17 +52,17 @@
   },
   "dependencies": {
     "@opencode-ai/sdk": "1.19.6",
-    "@opencode/plugin": "2.3.1",
+    "@opencode/plugin": "2.3.2",
     "oh-my-openagent": "5.1.75",
     "zod": "4.6.7"
   },
   "devDependencies": {
     "@ai-sdk/provider": "4.0.39",
     "@opencode-ai/plugin": "1.19.6",
-    "@opencode/ai": "2.3.1",
-    "@opencode/cli": "2.3.1",
-    "@opencode/schema": "2.3.1",
-    "@opencode/sdk": "2.3.1",
+    "@opencode/ai": "2.3.2",
+    "@opencode/cli": "2.3.2",
+    "@opencode/schema": "2.3.2",
+    "@opencode/sdk": "2.3.2",
     "@tsconfig/node26": "26.0.2",
     "@types/bun": "1.4.4",
     "@types/node": "26.6.6",

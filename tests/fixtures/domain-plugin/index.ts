@@ -3,18 +3,26 @@ import { tool } from "@opencode-ai/plugin";
 import { Plugin } from "@opencode/plugin";
 import { z } from "zod";
 import { registerDomains } from "../../../src/domains/index.js";
+import { ContentKind, MessageRole, PartKind, PermissionEffect } from "../../../src/enums.js";
 import { answer, scriptedProvider } from "../scripted-provider.js";
 
 const hooks: Hooks = {
-  tool: { bridge_echo: tool({
-    description: "Echo the supplied message after checking permission.",
-    args: { message: tool.schema.string() },
-    async execute(input, context) {
-      await context.ask({ permission: "bridge_echo", patterns: ["fixture"], always: [], metadata: {} });
-      context.metadata({ title: "echo progress", metadata: { seen: true } });
-      return { title: "echo result", output: input.message, metadata: { owner: "legacy" } };
-    },
-  }) },
+  tool: {
+    bridge_echo: tool({
+      description: "Echo the supplied message after checking permission.",
+      args: { message: tool.schema.string() },
+      async execute(input, context) {
+        await context.ask({
+          permission: "bridge_echo",
+          patterns: ["fixture"],
+          always: [],
+          metadata: {},
+        });
+        context.metadata({ title: "echo progress", metadata: { seen: true } });
+        return { title: "echo result", output: input.message, metadata: { owner: "legacy" } };
+      },
+    }),
+  },
   async "tool.execute.before"(event, output) {
     if (event.tool === "bridge_echo") {
       const args = z.object({ message: z.string() }).parse(output.args);
@@ -25,16 +33,26 @@ const hooks: Hooks = {
     if (event.tool === "bridge_echo") output.output += " after";
   },
   async "command.execute.before"(_event, output) {
-    for (const part of output.parts) if (part.type === "text") part.text += " command hook";
+    for (const part of output.parts) if (part.type === PartKind.Text) part.text += " command hook";
   },
 };
 
 let calls = 0;
 const provider = scriptedProvider(async (request) => {
-  if (request.prompt.some((message) => message.role === "tool")) return answer("done");
+  if (request.prompt.some((message) => message.role === MessageRole.Tool)) return answer("done");
   calls += 1;
-  return { ...answer(""), content: [{ type: "tool-call", toolCallId: `echo-${calls}`, toolName: "bridge_echo", input: JSON.stringify({ message: "hello" }) }],
-    finishReason: { unified: "tool-calls", raw: "tool_calls" } };
+  return {
+    ...answer(""),
+    content: [
+      {
+        type: ContentKind.ToolCall,
+        toolCallId: `echo-${calls}`,
+        toolName: "bridge_echo",
+        input: JSON.stringify({ message: "hello" }),
+      },
+    ],
+    finishReason: { unified: "tool-calls", raw: "tool_calls" },
+  };
 });
 
 // The CLI's plugin loader supplies @opencode/plugin and Effect runtime instances.
@@ -45,16 +63,37 @@ export default Plugin.define({
     const providerCleanup = await provider.setup(context);
     if (providerCleanup) scope.defer(providerCleanup);
     const dispose = await registerDomains(context, hooks, {
-      agent: { "bridge-fixture": { prompt: "Fixture instructions", model: "omsg-test/scripted", permission: { edit: "deny" } } },
+      agent: {
+        "bridge-fixture": {
+          prompt: "Fixture instructions",
+          model: "omsg-test/scripted",
+          permission: { edit: PermissionEffect.Deny },
+        },
+      },
       command: { "bridge-command": { template: "Argument: $ARGUMENTS" } },
     });
     scope.defer(dispose);
-    scope.defer((await context.command.transform((editor) => {
-      editor.add({ name: "fixture-wait", async execute(event) {
-        await context.session.wait({ sessionID: event.sessionID }, { signal: AbortSignal.timeout(10_000) });
-      } });
-      editor.add({ name: "fixture-dispose", async execute() { await dispose(); } });
-    })).dispose);
+    scope.defer(
+      (
+        await context.command.transform((editor) => {
+          editor.add({
+            name: "fixture-wait",
+            async execute(event) {
+              await context.session.wait(
+                { sessionID: event.sessionID },
+                { signal: AbortSignal.timeout(10_000) },
+              );
+            },
+          });
+          editor.add({
+            name: "fixture-dispose",
+            async execute() {
+              await dispose();
+            },
+          });
+        })
+      ).dispose,
+    );
     const owned = scope.move();
     return () => owned.disposeAsync();
   },

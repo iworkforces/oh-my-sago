@@ -1,6 +1,7 @@
 import type { Plugin } from "@opencode/plugin";
 import type { AgentInfo, ModelInfo } from "@opencode/client";
 import type { Agent, Config, Project, ProviderListResponse } from "@opencode-ai/sdk";
+import { NativeAction, PermissionEffect } from "../enums.js";
 import { unsupported } from "./errors.js";
 
 export function currentProject(context: Plugin.Context): Project {
@@ -14,24 +15,24 @@ export function currentProject(context: Plugin.Context): Project {
 function legacyAgent(agent: AgentInfo): Agent & { hidden: boolean; variant?: string } {
   const effect = (name: string) =>
     agent.permissions.findLast((rule) => rule.action === name && rule.resource === "*")?.effect ??
-    "ask";
+    PermissionEffect.Ask;
   return {
     name: agent.id,
     mode: agent.mode,
     builtIn: false,
     hidden: agent.hidden,
     permission: {
-      edit: effect("edit"),
+      edit: effect(NativeAction.Edit),
       bash: Object.fromEntries(
         agent.permissions
-          .filter((rule) => rule.action === "shell")
+          .filter((rule) => rule.action === NativeAction.Shell)
           .map((rule) => [rule.resource, rule.effect]),
       ),
     },
     tools: Object.fromEntries(
       agent.permissions
         .filter((rule) => rule.resource === "*")
-        .map((rule) => [rule.action, rule.effect !== "deny"]),
+        .map((rule) => [rule.action, rule.effect !== PermissionEffect.Deny]),
     ),
     options: { ...agent.request.settings, ...agent.request.body },
     ...(agent.description === undefined ? {} : { description: agent.description }),

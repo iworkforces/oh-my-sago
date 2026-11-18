@@ -1,5 +1,7 @@
+import { ErrorName } from "../enums.js";
+
 export class BridgeError extends Error {
-  override readonly name = "BridgeError";
+  override readonly name = ErrorName.Bridge;
   constructor(
     readonly status: number,
     message: string,
@@ -19,7 +21,7 @@ export function assertNever(value: never): never {
 export function errorResponse(error: unknown): Response {
   if (!(error instanceof Error)) throw error;
   return Response.json(
-    { name: "BadRequest", data: { message: error.message } },
+    { name: ErrorName.BadRequest, data: { message: error.message } },
     { status: error instanceof BridgeError ? error.status : 500 },
   );
 }

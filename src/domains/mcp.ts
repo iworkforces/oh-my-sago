@@ -2,6 +2,7 @@ import type { Config } from "@opencode-ai/sdk";
 import { Mcp, type Plugin } from "@opencode/plugin";
 import { z } from "zod";
 import { CompatibilityError } from "./value.js";
+import { McpServerType } from "../enums.js";
 
 export async function registerMcp(context: Plugin.Context, config: Config) {
   const servers = Object.entries(config.mcp ?? {}).map(([name, server]) => {
@@ -22,22 +23,22 @@ export async function registerMcp(context: Plugin.Context, config: Config) {
           }),
     };
     switch (server.type) {
-      case "local":
+      case McpServerType.Local:
         return {
           name,
           definition: new Mcp.LocalConfig({
-            type: "local",
+            type: McpServerType.Local,
             command: server.command,
             ...common,
             ...(server.environment === undefined ? {} : { environment: server.environment }),
           }),
         };
-      case "remote": {
+      case McpServerType.Remote: {
         const oauth = server.oauth;
         return {
           name,
           definition: new Mcp.RemoteConfig({
-            type: "remote",
+            type: McpServerType.Remote,
             url: server.url,
             ...common,
             ...(server.headers === undefined ? {} : { headers: server.headers }),

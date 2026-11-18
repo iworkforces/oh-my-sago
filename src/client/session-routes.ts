@@ -1,4 +1,5 @@
 import type { Plugin } from "@opencode/plugin";
+import { SessionOperation } from "../enums.js";
 import { BridgeError, unsupported } from "./errors.js";
 import { legacyMessages } from "./messages.js";
 import { body, createBody, updateBody } from "./requests.js";
@@ -39,7 +40,7 @@ export function sessionRoutes(context: Plugin.Context, state: ClientSessionState
         return Response.json(legacySession(session));
       }
     }
-    if (sessionID === "status" && request.method === "GET") {
+    if (sessionID === SessionOperation.Status && request.method === "GET") {
       const sessions = await listSessions(context, request);
       return Response.json(
         Object.fromEntries(sessions.map((session) => [session.id, sessionStatus(session)])),
@@ -70,11 +71,11 @@ export function sessionRoutes(context: Plugin.Context, state: ClientSessionState
           return Response.json(true);
       }
     }
-    if (operation === "abort" && request.method === "POST") {
+    if (operation === SessionOperation.Abort && request.method === "POST") {
       const result = await context.session.interrupt({ sessionID }, options);
       return Response.json(result.interrupted);
     }
-    if (operation === "message" && request.method === "GET") {
+    if (operation === SessionOperation.Message && request.method === "GET") {
       const session = await context.session.get({ sessionID }, options);
       const records = await context.session.context({ sessionID }, options);
       const messages = legacyMessages(session, records);
@@ -94,7 +95,9 @@ export function sessionRoutes(context: Plugin.Context, state: ClientSessionState
     if (
       request.method === "POST" &&
       path.length === 3 &&
-      (operation === "message" || operation === "prompt_async" || operation === "summarize")
+      (operation === SessionOperation.Message ||
+        operation === SessionOperation.PromptAsync ||
+        operation === SessionOperation.Summarize)
     ) {
       return prompt(request, sessionID, operation);
     }

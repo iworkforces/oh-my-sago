@@ -9,10 +9,16 @@ export default Plugin.define({
     const instance = crypto.randomUUID();
     const cleanup = await omsg.setup(context);
     const receipt = { id: omsg.id, instance, directory: context.location.directory };
-    await appendFile(join(context.location.directory, "cleanup.jsonl"), `${JSON.stringify({ ...receipt, event: "setup" })}\n`);
+    await appendFile(
+      join(context.location.directory, "cleanup.jsonl"),
+      `${JSON.stringify({ ...receipt, event: "setup" })}\n`,
+    );
     return async () => {
       await cleanup?.();
-      await appendFile(join(context.location.directory, "cleanup.jsonl"), `${JSON.stringify({ ...receipt, event: "cleanup" })}\n`);
+      await appendFile(
+        join(context.location.directory, "cleanup.jsonl"),
+        `${JSON.stringify({ ...receipt, event: "cleanup" })}\n`,
+      );
     };
   },
 });

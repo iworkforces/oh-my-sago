@@ -1,5 +1,15 @@
 import type { SessionInfo, SessionMessageInfo, SessionStructuredError } from "@opencode/client";
 import type { AssistantMessage, Message, Part, SessionMessagesResponse } from "@opencode-ai/sdk";
+import {
+  AssistantContentKind,
+  ErrorName,
+  MessageRole,
+  PartKind,
+  PromptFileSourceKind,
+  RecordType,
+  SessionOutcome,
+  ToolStateStatus,
+} from "../enums.js";
 import { assertNever } from "./errors.js";
 import { legacyToolState } from "./tool-parts.js";
 
@@ -8,10 +18,10 @@ export function legacyError(error: SessionStructuredError): NonNullable<Assistan
     error.type.toLowerCase().includes("interrupt") ||
     error.type.toLowerCase().includes("abort")
   ) {
-    return { name: "MessageAbortedError", data: { message: error.message } };
+    return { name: ErrorName.Aborted, data: { message: error.message } };
   }
   return {
-    name: "APIError",
+    name: ErrorName.Api,
     data: {
       message: error.message,
       isRetryable: error.retryAfterMs !== undefined,
@@ -33,39 +43,39 @@ export function legacyMessages(
     const base = { id: record.id, sessionID: session.id, time: { created: record.time.created } };
     const partBase = { id: `${record.id}:text`, sessionID: session.id, messageID: record.id };
     switch (record.type) {
-      case "agent-switched":
+      case RecordType.AgentSwitched:
         agent = record.agent;
         break;
-      case "model-switched":
+      case RecordType.ModelSwitched:
         model = record.model;
         break;
-      case "user":
-      case "synthetic":
-      case "system":
-      case "skill": {
+      case RecordType.User:
+      case RecordType.Synthetic:
+      case RecordType.System:
+      case RecordType.Skill: {
         const info: Message = {
           ...base,
-          role: "user",
+          role: MessageRole.User,
           agent,
           model: { providerID: model?.providerID ?? "", modelID: model?.id ?? "" },
         };
         const parts: Part[] = [
           {
             ...partBase,
-            type: "text",
+            type: PartKind.Text,
             text: record.text,
-            ...(record.type === "user" ? {} : { synthetic: true }),
+            ...(record.type === RecordType.User ? {} : { synthetic: true }),
           },
         ];
-        if (record.type === "user") {
+        if (record.type === RecordType.User) {
           parts.push(
             ...(record.files ?? []).map((file, index): Part => ({
               ...partBase,
               id: `${record.id}:file:${index}`,
-              type: "file",
+              type: PartKind.File,
               mime: file.mime,
               url:
-                file.source.type === "uri"
+                file.source.type === PromptFileSourceKind.Uri
                   ? file.source.uri
                   : `data:${file.mime};base64,${file.data}`,
               ...(file.name === undefined ? {} : { filename: file.name }),
@@ -75,7 +85,7 @@ export function legacyMessages(
             ...(record.agents ?? []).map((mention, index): Part => ({
               ...partBase,
               id: `${record.id}:agent:${index}`,
-              type: "agent",
+              type: PartKind.Agent,
               name: mention.name,
             })),
           );
@@ -84,10 +94,10 @@ export function legacyMessages(
         parentID = record.id;
         break;
       }
-      case "assistant": {
+      case RecordType.Assistant: {
         const info: AssistantMessage = {
           ...base,
-          role: "assistant",
+          role: MessageRole.Assistant,
           parentID,
           time: { ...record.time },
           providerID: record.model.providerID,
@@ -107,21 +117,21 @@ export function legacyMessages(
         const parts = record.content.map((content, index): Part => {
           const identity = { ...partBase, id: `${record.id}:${index}` };
           switch (content.type) {
-            case "text":
-              return { ...identity, type: "text", text: content.text };
-            case "reasoning":
+            case AssistantContentKind.Text:
+              return { ...identity, type: PartKind.Text, text: content.text };
+            case AssistantContentKind.Reasoning:
               return {
                 ...identity,
-                type: "reasoning",
+                type: PartKind.Reasoning,
                 text: content.text,
                 time: {
                   start: content.time?.created ?? record.time.created,
                   ...(content.time?.completed === undefined ? {} : { end: content.time.completed }),
                 },
               };
-            case "tool": {
+            case AssistantContentKind.Tool: {
               const state = legacyToolState(content);
-              if (state.status === "completed" && state.attachments) {
+              if (state.status === ToolStateStatus.Completed && state.attachments) {
                 state.attachments = state.attachments.map((file) => ({
                   ...file,
                   sessionID: session.id,
@@ -131,7 +141,7 @@ export function legacyMessages(
               return {
                 ...identity,
                 id: `${record.id}:tool:${content.id}`,
-                type: "tool",
+                type: PartKind.Tool,
                 callID: content.id,
                 tool: content.name,
                 state,
@@ -144,13 +154,16 @@ export function legacyMessages(
         result.push({ info, parts });
         break;
       }
-      case "idle": {
+      case RecordType.Idle: {
         const last = result.at(-1);
-        if (record.outcome !== "succeeded" && last?.info.role !== "assistant") {
+        if (
+          record.outcome !== SessionOutcome.Succeeded &&
+          last?.info.role !== MessageRole.Assistant
+        ) {
           result.push({
             info: {
               ...base,
-              role: "assistant",
+              role: MessageRole.Assistant,
               parentID,
               mode: agent,
               modelID: model?.id ?? "",
@@ -163,7 +176,9 @@ export function legacyMessages(
                 record.error === undefined
                   ? {
                       name:
-                        record.outcome === "interrupted" ? "MessageAbortedError" : "UnknownError",
+                        record.outcome === SessionOutcome.Interrupted
+                          ? ErrorName.Aborted
+                          : ErrorName.Unknown,
                       data: { message: `Session ${record.outcome}` },
                     }
                   : legacyError(record.error),
@@ -172,23 +187,26 @@ export function legacyMessages(
           });
         }
         if (
-          last?.info.role === "assistant" &&
-          record.outcome !== "succeeded" &&
+          last?.info.role === MessageRole.Assistant &&
+          record.outcome !== SessionOutcome.Succeeded &&
           last.info.error === undefined
         ) {
           last.info.error =
             record.error === undefined
               ? {
-                  name: record.outcome === "interrupted" ? "MessageAbortedError" : "UnknownError",
+                  name:
+                    record.outcome === SessionOutcome.Interrupted
+                      ? ErrorName.Aborted
+                      : ErrorName.Unknown,
                   data: { message: `Session ${record.outcome}` },
                 }
               : legacyError(record.error);
         }
         break;
       }
-      case "location-switched":
-      case "shell":
-      case "compaction":
+      case RecordType.LocationSwitched:
+      case RecordType.Shell:
+      case RecordType.Compaction:
         break;
       default:
         assertNever(record);

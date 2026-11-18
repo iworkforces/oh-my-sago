@@ -1,10 +1,11 @@
 import { Schema } from "effect";
+import { ErrorName } from "../enums.js";
 import { z } from "zod";
 
 export class CompatibilityError extends Error {
   constructor(readonly feature: string) {
     super(`Legacy configuration is not supported by OpenCode 2.3.0: ${feature}`);
-    this.name = "CompatibilityError";
+    this.name = ErrorName.Compatibility;
   }
 }
 

@@ -3,6 +3,7 @@ import type { Config, Part } from "@opencode-ai/sdk";
 import { Model, type Plugin } from "@opencode/plugin";
 import { CompatibilityError } from "./value.js";
 import { promptInput } from "./prompt.js";
+import { PartKind } from "../enums.js";
 
 export async function registerCommands(context: Plugin.Context, hooks: Hooks, config: Config) {
   return context.command.transform((editor) => {
@@ -24,7 +25,13 @@ export async function registerCommands(context: Plugin.Context, hooks: Hooks, co
           const id = crypto.randomUUID();
           const output: { parts: Part[] } = {
             parts: [
-              { type: "text", id, messageID: id, sessionID: event.sessionID, text: template },
+              {
+                type: PartKind.Text,
+                id,
+                messageID: id,
+                sessionID: event.sessionID,
+                text: template,
+              },
             ],
           };
           await hooks["command.execute.before"]?.(
@@ -33,7 +40,7 @@ export async function registerCommands(context: Plugin.Context, hooks: Hooks, co
           );
           const text = output.parts
             .map((part) => {
-              if (part.type !== "text")
+              if (part.type !== PartKind.Text)
                 throw new CompatibilityError(`command ${name}: ${part.type} part`);
               return part.text;
             })

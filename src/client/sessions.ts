@@ -1,6 +1,7 @@
 import type { Plugin } from "@opencode/plugin";
 import type { SessionInfo } from "@opencode/client";
 import type { Session, SessionStatus } from "@opencode-ai/sdk";
+import { SessionStatusKind } from "../enums.js";
 
 export function legacySession(session: SessionInfo): Session {
   return {
@@ -17,8 +18,8 @@ export function legacySession(session: SessionInfo): Session {
 export function sessionStatus(session: SessionInfo): SessionStatus {
   const { busy, idle } = session.time;
   return busy !== undefined && (idle === undefined || busy > idle)
-    ? { type: "busy" }
-    : { type: "idle" };
+    ? { type: SessionStatusKind.Busy }
+    : { type: SessionStatusKind.Idle };
 }
 
 export async function listSessions(

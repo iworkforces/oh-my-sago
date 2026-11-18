@@ -1,13 +1,14 @@
 import { expect, test } from "bun:test";
+import { cliVersion } from "./fixtures/cli-host.js";
 import { runScenario } from "./fixtures/run-scenario.js";
 
-test("user-root commands and skills are native and retain existing definitions on OpenCode 2.3.0", async () => {
+test("user-root commands and skills are native and retain existing definitions on the pinned OpenCode CLI", async () => {
   const result = await runScenario("./discovery-scenario.ts");
   console.error(result.stderr);
   console.error(result.stdout.trim());
   expect(result.exitCode, result.stderr).toBe(0);
   expect(JSON.parse(result.stdout)).toEqual({
-    runtime: "opencode v2.3.0",
+    runtime: cliVersion(),
     missingRoots: "passed",
     commands: "passed",
     skills: "passed",
