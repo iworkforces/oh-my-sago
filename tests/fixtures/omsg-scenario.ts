@@ -3,6 +3,7 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
+import { PartKind, ToolStateStatus } from "../../src/enums.js";
 import { cliHost } from "./cli-host.js";
 import { verifyDelegation } from "./omsg-delegation.js";
 import { verifyGuard, verifyLifecycle } from "./omsg-lifecycle.js";
@@ -104,17 +105,20 @@ const records = z
 const parts = records.flatMap((record) => record.content ?? []);
 assert.ok(
   parts.some(
-    (part) => part.type === "tool" && part.name === "skill" && part.state?.status === "completed",
+    (part) =>
+      part.type === PartKind.Tool &&
+      part.name === "skill" &&
+      part.state?.status === ToolStateStatus.Completed,
   ),
   JSON.stringify(records),
 );
 assert.equal(
-  parts.find((part) => part.type === "tool" && part.name === "skill")?.state?.metadata?.name,
+  parts.find((part) => part.type === PartKind.Tool && part.name === "skill")?.state?.metadata?.name,
   "git-master",
   "Completed skills must provide the name used by the native TUI.",
 );
 assert.ok(
-  parts.some((part) => part.type === "text" && part.text === "omsg ready"),
+  parts.some((part) => part.type === PartKind.Text && part.text === "omsg ready"),
   JSON.stringify(records),
 );
 const delegation = await verifyDelegation(host, selected.id);
