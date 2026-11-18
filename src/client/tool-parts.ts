@@ -1,5 +1,6 @@
 import type { SessionMessageAssistantTool } from "@opencode/client";
 import type { ToolPart } from "@opencode-ai/sdk";
+import { PartKind, ToolContentKind, ToolRunStatus, ToolStateStatus } from "../enums.js";
 import { assertNever } from "./errors.js";
 import { legacyArguments, jsonRecord } from "../domains/value.js";
 
@@ -8,27 +9,29 @@ export function legacyToolState(tool: SessionMessageAssistantTool): ToolPart["st
   const end = tool.time.completed ?? start;
   const state = tool.state;
   const input =
-    state.status === "streaming" ? {} : jsonRecord.parse(legacyArguments(tool.name, state.input));
+    state.status === ToolRunStatus.Streaming
+      ? {}
+      : jsonRecord.parse(legacyArguments(tool.name, state.input));
   switch (state.status) {
-    case "streaming":
-      return { status: "pending", input: {}, raw: state.input };
-    case "running":
-      return { status: "running", input, metadata: state.metadata, time: { start } };
-    case "completed":
+    case ToolRunStatus.Streaming:
+      return { status: ToolStateStatus.Pending, input: {}, raw: state.input };
+    case ToolRunStatus.Running:
+      return { status: ToolStateStatus.Running, input, metadata: state.metadata, time: { start } };
+    case ToolRunStatus.Completed:
       return {
-        status: "completed",
+        status: ToolStateStatus.Completed,
         input,
         output: state.content
-          .flatMap((part) => (part.type === "text" ? [part.text] : []))
+          .flatMap((part) => (part.type === ToolContentKind.Text ? [part.text] : []))
           .join("\n"),
         title: tool.name,
         metadata: state.metadata ?? {},
         time: { start, end },
         attachments: state.content.flatMap((part, index) =>
-          part.type === "file"
+          part.type === ToolContentKind.File
             ? [
                 {
-                  type: "file" as const,
+                  type: PartKind.File,
                   id: `${tool.id}:file:${index}`,
                   sessionID: "",
                   messageID: "",
@@ -40,9 +43,9 @@ export function legacyToolState(tool: SessionMessageAssistantTool): ToolPart["st
             : [],
         ),
       };
-    case "error":
+    case ToolRunStatus.Error:
       return {
-        status: "error",
+        status: ToolStateStatus.Error,
         input,
         error: state.error.message,
         ...(state.metadata === undefined ? {} : { metadata: state.metadata }),

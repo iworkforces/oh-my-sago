@@ -1,7 +1,9 @@
 import type { SessionContext } from "@opencode/plugin/promise/session";
 import type { z } from "zod";
+import { ContentKind } from "../enums.js";
 import { nativeAction } from "../domains/permissions.js";
 import { legacyName } from "../domains/value.js";
+import { MessageRole } from "../enums.js";
 import { type permission, promptBody } from "./requests.js";
 
 export const promptOverrides = promptBody
@@ -39,14 +41,16 @@ export class ClientSessionState {
 
   apply(event: SessionContext): void {
     const stored = event.messages.findLast(
-      (message) => message.role === "user" && message.metadata?.["omsg.client"] !== undefined,
+      (message) =>
+        message.role === MessageRole.User && message.metadata?.["omsg.client"] !== undefined,
     );
     const overrides =
       stored === undefined
         ? this.#pending.get(event.sessionID)
         : promptOverrides.parse(stored.metadata?.["omsg.client"]);
     if (overrides === undefined) return;
-    if (overrides.system !== undefined) event.system.push({ type: "text", text: overrides.system });
+    if (overrides.system !== undefined)
+      event.system.push({ type: ContentKind.Text, text: overrides.system });
     const { system: _system, tools, options, params, maxOutputTokens, ...generation } = overrides;
     Object.assign(event.options, options, params, generation);
     if (maxOutputTokens !== undefined) event.options.maxTokens = maxOutputTokens;
