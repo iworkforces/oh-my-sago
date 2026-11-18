@@ -47,7 +47,7 @@ export function createClientBridge(context: Plugin.Context): ClientBridge {
         ? await sessions(request, path)
         : await discoveryRoute(context, request);
     } catch (error) {
-      if (request.signal.aborted) throw error;
+      if (request.signal.aborted || !(error instanceof Error)) throw error;
       if (error instanceof z.ZodError || error instanceof SyntaxError || error instanceof URIError)
         return errorResponse(new BridgeError(400, error.message));
       return errorResponse(error);
