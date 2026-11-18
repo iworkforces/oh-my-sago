@@ -1,6 +1,7 @@
 import { z } from "zod";
+import { LegacyAction, NativeAction, permissionEffects } from "../enums.js";
 
-const effect = z.enum(["allow", "deny", "ask"]);
+const effect = z.enum(permissionEffects);
 const rules = z.union([
   effect.transform((value) => ({ "*": value })),
   z.record(z.string(), z.union([effect, z.record(z.string(), effect)])),
@@ -8,14 +9,14 @@ const rules = z.union([
 
 export function nativeAction(action: string): string {
   switch (action) {
-    case "write":
-    case "patch":
-    case "apply_patch":
-      return "edit";
-    case "task":
-      return "subagent";
-    case "bash":
-      return "shell";
+    case LegacyAction.Write:
+    case LegacyAction.Patch:
+    case LegacyAction.ApplyPatch:
+      return NativeAction.Edit;
+    case LegacyAction.Task:
+      return NativeAction.Subagent;
+    case LegacyAction.Bash:
+      return NativeAction.Shell;
     default:
       return action;
   }
