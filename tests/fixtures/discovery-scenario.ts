@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
+import { PartKind, PermissionEffect, RecordType, ToolStateStatus } from "../../src/enums.js";
 import { cliHost } from "./cli-host.js";
 
 const directory = process.argv[2];
@@ -167,7 +168,7 @@ async function session() {
       location: { directory },
       agent: "build",
       model: { providerID: "omsg-test", id: "scripted" },
-      permissions: [{ action: "skill", resource: "*", effect: "allow" }],
+      permissions: [{ action: "skill", resource: "*", effect: PermissionEffect.Allow }],
     }),
   ).data;
 }
@@ -185,7 +186,7 @@ for (const [name, expected] of [
     await host.request(`/api/session/${current.id}/context`),
   ).data;
   assert.ok(
-    records.some((record) => record.type === "user" && record.text?.includes(expected)),
+    records.some((record) => record.type === RecordType.User && record.text?.includes(expected)),
     JSON.stringify({ name, expected, records }),
   );
 }
@@ -203,8 +204,8 @@ for (const [name, content] of [
   ).data;
   const result = records
     .flatMap((record) => record.content ?? [])
-    .find((part) => part.type === "tool" && part.name === "skill");
-  assert.equal(result?.state?.status, "completed", JSON.stringify({ name, records }));
+    .find((part) => part.type === PartKind.Tool && part.name === "skill");
+  assert.equal(result?.state?.status, ToolStateStatus.Completed, JSON.stringify({ name, records }));
   assert.ok(JSON.stringify(result.state.content).includes(name), JSON.stringify(result));
   assert.ok(JSON.stringify(result.state.content).includes(content), JSON.stringify(result));
 }
