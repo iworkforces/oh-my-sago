@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join, relative, sep } from "node:path";
 import type { Config } from "@opencode-ai/sdk";
 import { Skill, type Plugin } from "@opencode/plugin";
+import type { Registration } from "@opencode/plugin/promise/registration";
 import { z } from "zod";
 
 const frontmatter = z.object({
@@ -62,8 +63,15 @@ async function markdown(file: { readonly path: string; readonly canonical: strin
   }
 }
 
-export async function registerUserDiscovery(context: Plugin.Context) {
-  const commands = new Map<string, NonNullable<Config["command"]>[string]>();
+type CommandDefinition = NonNullable<Config["command"]>[string];
+
+export interface UserDiscovery {
+  readonly commands: Record<string, CommandDefinition>;
+  readonly dispose: Registration["dispose"];
+}
+
+export async function registerUserDiscovery(context: Plugin.Context): Promise<UserDiscovery> {
+  const commands = new Map<string, CommandDefinition>();
   const skills = new Map<string, Skill.Info>();
   for (const directory of [".agents", ".opencode"]) {
     const root = join(homedir(), directory);

@@ -1,18 +1,23 @@
 import type { Hooks } from "@opencode-ai/plugin";
 import type { Config, Part } from "@opencode-ai/sdk";
 import { Model, type Plugin } from "@opencode/plugin";
+import type { Registration } from "@opencode/plugin/promise/registration";
 import { CompatibilityError } from "./value.js";
 import { promptInput } from "./prompt.js";
 import { PartKind } from "../enums.js";
 
-export async function registerCommands(context: Plugin.Context, hooks: Hooks, config: Config) {
+export async function registerCommands(
+  context: Plugin.Context,
+  hooks: Hooks,
+  config: Config,
+): Promise<Registration> {
   return context.command.transform((editor) => {
     for (const [name, definition] of Object.entries(config.command ?? {})) {
       editor.add({
         name,
         ...(definition.description === undefined ? {} : { description: definition.description }),
         async execute(event) {
-          if (definition.subtask) throw new CompatibilityError(`command ${name}: subtask`);
+          if (definition.subtask === true) throw new CompatibilityError(`command ${name}: subtask`);
           if (/!`|@\{/.test(definition.template))
             throw new CompatibilityError(`command ${name}: shell or file expansion`);
           const argumentsText = event.prompt.text;
@@ -45,12 +50,12 @@ export async function registerCommands(context: Plugin.Context, hooks: Hooks, co
               return part.text;
             })
             .join("\n");
-          if (definition.agent)
+          if (definition.agent !== undefined && definition.agent !== "")
             await context.session.switchAgent({
               sessionID: event.sessionID,
               agent: definition.agent,
             });
-          if (definition.model) {
+          if (definition.model !== undefined && definition.model !== "") {
             const model = Model.Ref.parse(definition.model);
             await context.session.switchModel({
               sessionID: event.sessionID,

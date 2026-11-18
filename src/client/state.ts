@@ -1,7 +1,7 @@
 import type { SessionContext } from "@opencode/plugin/promise/session";
 import type { z } from "zod";
 import { ContentKind } from "../enums.js";
-import { nativeAction } from "../domains/permissions.js";
+import { type NativePermission, nativeAction } from "../domains/permissions.js";
 import { legacyName } from "../domains/value.js";
 import { MessageRole } from "../enums.js";
 import { type permission, promptBody } from "./requests.js";
@@ -20,7 +20,7 @@ export const promptOverrides = promptBody
   .strip();
 export type PromptOverrides = z.infer<typeof promptOverrides>;
 
-export function permissionRules(rules: readonly z.infer<typeof permission>[]) {
+export function permissionRules(rules: readonly z.infer<typeof permission>[]): NativePermission[] {
   return rules.map((rule) => ({
     action: nativeAction(rule.permission),
     resource: rule.pattern,

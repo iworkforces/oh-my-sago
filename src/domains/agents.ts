@@ -1,30 +1,35 @@
 import type { Config } from "@opencode-ai/sdk";
 import { Agent, Model, type Plugin } from "@opencode/plugin";
+import type { Registration } from "@opencode/plugin/promise/registration";
 import { z } from "zod";
 import { PermissionEffect } from "../enums.js";
 import { nativePermissions } from "./permissions.js";
+import { jsonRecord } from "./value.js";
 
 const extras = z.object({
   hidden: z.boolean().optional(),
   variant: z.string().optional(),
   steps: z.number().int().positive().optional(),
-  options: z.record(z.string(), z.unknown()).optional(),
+  options: jsonRecord.optional(),
 });
 
-export async function registerAgents(context: Plugin.Context, config: Config) {
+export async function registerAgents(
+  context: Plugin.Context,
+  config: Config,
+): Promise<Registration> {
   const definitions = Object.entries(config.agent ?? {}).flatMap(([name, definition]) =>
     definition === undefined ? [] : [{ name, definition, extra: extras.parse(definition) }],
   );
   const selection = z.object({ default_agent: z.string().optional() }).parse(config);
   return context.agent.transform((editor) => {
     for (const { name, definition, extra } of definitions) {
-      if (definition.disable) {
+      if (definition.disable === true) {
         editor.remove(name);
         continue;
       }
       editor.update(name, (agent) => {
         agent.name = Agent.Name.make(name);
-        if (definition.model) {
+        if (definition.model !== undefined && definition.model !== "") {
           agent.model = {
             ...Model.Ref.parse(definition.model),
             ...(extra.variant === undefined

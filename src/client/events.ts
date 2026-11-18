@@ -37,7 +37,12 @@ const types = [
   SessionEventType.ToolFailed,
 ] as const;
 
-export function clientEvents(context: Plugin.Context) {
+export interface ClientEvents {
+  start(hooks: Hooks): Promise<void>;
+  dispose(): Promise<void>;
+}
+
+export function clientEvents(context: Plugin.Context): ClientEvents {
   const controller = new AbortController();
   const sessions = new Map<string, SessionInfo>();
   const messages = new Map<string, SessionMessagesResponse>();
@@ -64,7 +69,7 @@ export function clientEvents(context: Plugin.Context) {
         try {
           await seeded;
           let next = await first;
-          while (!next.done) {
+          while (next.done !== true) {
             const event = next.value;
             const { sessionID } = event.data;
             if (event.type === SessionEventType.Deleted) {

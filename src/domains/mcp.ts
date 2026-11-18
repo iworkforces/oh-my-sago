@@ -1,11 +1,19 @@
 import type { Config } from "@opencode-ai/sdk";
 import { Mcp, type Plugin } from "@opencode/plugin";
+import type { Registration } from "@opencode/plugin/promise/registration";
 import { z } from "zod";
 import { CompatibilityError } from "./value.js";
 import { McpServerType } from "../enums.js";
 
-export async function registerMcp(context: Plugin.Context, config: Config) {
-  const servers = Object.entries(config.mcp ?? {}).map(([name, server]) => {
+/** Legacy configs may only toggle a server defined elsewhere; the SDK type omits that shape. */
+type LegacyServer = NonNullable<Config["mcp"]>[string] | { readonly type?: undefined };
+type ServerChange =
+  | { readonly name: string; readonly toggle: boolean }
+  | { readonly name: string; readonly definition: Mcp.ServerConfig };
+
+export async function registerMcp(context: Plugin.Context, config: Config): Promise<Registration> {
+  const legacy: Readonly<Record<string, LegacyServer>> = config.mcp ?? {};
+  const servers = Object.entries(legacy).map(([name, server]): ServerChange => {
     if (server.type === undefined) {
       return { name, toggle: z.object({ enabled: z.boolean() }).strict().parse(server).enabled };
     }

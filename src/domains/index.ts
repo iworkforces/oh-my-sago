@@ -7,7 +7,11 @@ import { registerMcp } from "./mcp.js";
 import { prepareTools, registerTools } from "./tools.js";
 import { legacyName } from "./value.js";
 
-export async function registerDomains(context: Plugin.Context, hooks: Hooks, config: Config) {
+export async function registerDomains(
+  context: Plugin.Context,
+  hooks: Hooks,
+  config: Config,
+): Promise<() => Promise<void>> {
   await using scope = new AsyncDisposableStack();
   await hooks.config?.(config);
   scope.defer((await registerAgents(context, config)).dispose);
