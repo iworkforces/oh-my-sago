@@ -3,10 +3,11 @@ import type { SessionPrompt } from "@opencode/plugin/promise/session";
 import type { Hooks } from "@opencode-ai/plugin";
 import type { Part, UserMessage } from "@opencode-ai/sdk";
 import { CompatibilityError } from "../domains/value.js";
-import { promptOverrides } from "../client/state.js";
+import { clientMetadata, promptOverrides } from "../client/state.js";
 import { BridgeError } from "../client/errors.js";
 import { assertNever } from "../client/errors.js";
 import { MessageRole, PartKind } from "../enums.js";
+import { switchModelKeepingVariant } from "./model.js";
 
 export async function transformPrompt(
   context: Plugin.Context,
@@ -22,13 +23,15 @@ export async function transformPrompt(
     throw new BridgeError(404, "No default model is available for this session");
   const model = { providerID: selected.providerID, modelID: selected.id };
   const identity = { sessionID: event.sessionID, messageID: event.messageID };
-  const message: UserMessage = {
+  const stored = promptOverrides.parse(event.metadata?.[clientMetadata] ?? {});
+  const message: UserMessage & { variant?: unknown } = {
     id: event.messageID,
     sessionID: event.sessionID,
     role: MessageRole.User,
     time: { created: Date.now() },
     agent: session.agent ?? "",
     model,
+    ...(stored.variant === undefined ? {} : { variant: stored.variant }),
   };
   const parts: Part[] = [
     { ...identity, id: `${event.messageID}:text`, type: PartKind.Text, text: event.prompt.text },
@@ -52,7 +55,7 @@ export async function transformPrompt(
     });
   }
   const output = { message, parts };
-  const variant = session.model?.variant;
+  const variant = stored.variant ?? session.model?.variant;
   await hooks["chat.message"](
     {
       sessionID: event.sessionID,
@@ -110,20 +113,21 @@ export async function transformPrompt(
   const updated = output.message;
   if (updated.agent !== "" && updated.agent !== session.agent)
     await context.session.switchAgent({ sessionID: event.sessionID, agent: updated.agent });
-  if (updated.model.providerID !== selected?.providerID || updated.model.modelID !== selected.id) {
-    await context.session.switchModel({
-      sessionID: event.sessionID,
-      model: { providerID: updated.model.providerID, id: updated.model.modelID },
+  if (updated.model.providerID !== selected.providerID || updated.model.modelID !== selected.id)
+    await switchModelKeepingVariant(context, event.sessionID, {
+      providerID: updated.model.providerID,
+      id: updated.model.modelID,
     });
-  }
-  if (updated.system !== undefined || updated.tools !== undefined) {
-    const overrides = promptOverrides.parse(event.metadata?.["omsago.client"] ?? {});
+  const chosen = typeof updated.variant === "string" ? updated.variant : undefined;
+  if (updated.system !== undefined || updated.tools !== undefined || chosen !== stored.variant) {
+    const { variant: _variant, ...overrides } = stored;
     event.metadata = {
       ...event.metadata,
-      "omsago.client": {
+      [clientMetadata]: {
         ...overrides,
         ...(updated.system === undefined ? {} : { system: updated.system }),
         ...(updated.tools === undefined ? {} : { tools: updated.tools }),
+        ...(chosen === undefined ? {} : { variant: chosen }),
       },
     };
   }

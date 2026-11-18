@@ -15,11 +15,26 @@ export function legacySession(session: SessionInfo): Session {
   };
 }
 
-export function sessionStatus(session: SessionInfo): SessionStatus {
-  const { busy, idle } = session.time;
-  return busy !== undefined && (idle === undefined || busy > idle)
-    ? { type: SessionStatusKind.Busy }
-    : { type: SessionStatusKind.Idle };
+export type RetryStatus = Extract<SessionStatus, { type: typeof SessionStatusKind.Retry }>;
+
+/** Pending provider retries, shared by one bridge's event loop and its status route. */
+export class SessionRetries {
+  readonly #pending = new Map<string, RetryStatus>();
+
+  set(sessionID: string, status: RetryStatus): void {
+    this.#pending.set(sessionID, status);
+  }
+  clear(sessionID: string): boolean {
+    return this.#pending.delete(sessionID);
+  }
+  status(session: SessionInfo): SessionStatus {
+    const retry = this.#pending.get(session.id);
+    if (retry !== undefined) return retry;
+    const { busy, idle } = session.time;
+    return busy !== undefined && (idle === undefined || busy > idle)
+      ? { type: SessionStatusKind.Busy }
+      : { type: SessionStatusKind.Idle };
+  }
 }
 
 export async function listSessions(

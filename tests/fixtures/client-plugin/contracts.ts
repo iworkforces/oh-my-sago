@@ -1,14 +1,21 @@
 import assert from "node:assert/strict";
 import type { Plugin } from "@opencode/plugin";
 import type { SessionInfo } from "@opencode/client";
-import { SessionStatusKind } from "../../../src/enums.js";
+import { SessionStatusKind, ToastVariant } from "../../../src/enums.js";
 import { createClientBridge } from "../../../src/client/index.js";
+
+export const fixtureToast = {
+  title: "fixture title",
+  message: "fixture toast",
+  variant: ToastVariant.Warning,
+  duration: 1234,
+} as const;
 
 export async function verifyClient(fixture: {
   readonly context: Plugin.Context;
   readonly bridge: ReturnType<typeof createClientBridge>;
   readonly session: SessionInfo;
-}): Promise<Readonly<Record<"discovery" | "sessions" | "pagination", "passed">>> {
+}): Promise<Readonly<Record<"discovery" | "sessions" | "pagination" | "toasts", "passed">>> {
   const directory = fixture.context.location.directory;
   {
     const { input } = fixture.bridge;
@@ -68,8 +75,10 @@ export async function verifyClient(fixture: {
     assert.ok((await client.session.list()).data?.some((session) => session.id === id) === true);
     assert.deepEqual((await client.session.status()).data?.[id], { type: SessionStatusKind.Idle });
     const todo = await client.session.todo({ path: { id } });
-    assert.equal(todo.response.status, 501);
-    assert.equal(todo.data, undefined);
+    assert.equal(todo.response.status, 200);
+    assert.deepEqual(todo.data, []);
+    const children = await client.session.children({ path: { id } });
+    assert.equal(children.response.status, 501);
     assert.equal((await client.session.delete({ path: { id } })).data, true);
     assert.equal(
       (await fixture.context.session.list({ directory })).data.some((session) => session.id === id),
@@ -93,8 +102,12 @@ export async function verifyClient(fixture: {
         },
       },
     };
-    const bridge = createClientBridge(context);
+    const bridge = createClientBridge(context, {
+      emit: () => Promise.reject(new Error("toast transport is down")),
+    });
     try {
+      const shown = await bridge.input.client.tui.showToast({ body: fixtureToast });
+      assert.equal(shown.data, true, JSON.stringify(shown.error));
       const controller = new AbortController();
       const sessions = await bridge.input.client.session.list({ signal: controller.signal });
       assert.deepEqual(
@@ -111,5 +124,19 @@ export async function verifyClient(fixture: {
       await bridge.dispose();
     }
   }
-  return { discovery: "passed", sessions: "passed", pagination: "passed" } as const;
+  {
+    const tui = fixture.bridge.input.client.tui;
+    const shown = await tui.showToast({ body: fixtureToast });
+    assert.equal(shown.response.status, 200);
+    assert.equal(shown.data, true);
+    const invalid = await tui.showToast();
+    assert.equal(invalid.response.status, 400);
+    assert.equal((await tui.openHelp()).response.status, 501);
+  }
+  return {
+    discovery: "passed",
+    sessions: "passed",
+    pagination: "passed",
+    toasts: "passed",
+  } as const;
 }

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import type { Plugin } from "@opencode/plugin";
-import type { Event } from "@opencode-ai/sdk";
+import type { LegacyEvent } from "../../../src/client/events.js";
 import type { createClientBridge } from "../../../src/client/index.js";
 import {
   CompactionStatus,
@@ -11,23 +11,62 @@ import {
   PartKind,
   RecordType,
   SessionOutcome,
+  SessionStatusKind,
   ToolStateStatus,
 } from "../../../src/enums.js";
+import { EventLog, idleOf } from "./events.js";
+import type { ClientModel } from "./model.js";
+
+type Scenario =
+  | "turns"
+  | "errors"
+  | "cancellation"
+  | "events"
+  | "compaction"
+  | "retry"
+  | "variants";
+
+function settledOrder(events: readonly LegacyEvent[]): string[] {
+  const types = events.map((event) =>
+    event.type === LegacyEventType.SessionStatus
+      ? `${event.type}:${event.properties.status.type}`
+      : event.type,
+  );
+  const idle = types.lastIndexOf(LegacyEventType.SessionIdle);
+  const status = types.lastIndexOf(`${LegacyEventType.SessionStatus}:${SessionStatusKind.Idle}`);
+  assert.ok(status >= 0 && status < idle, JSON.stringify(types));
+  const updates: string[] = [LegacyEventType.MessageUpdated, LegacyEventType.MessagePartUpdated];
+  assert.ok(
+    types.slice(idle + 1).every((type) => !updates.includes(type)),
+    `message updates followed session.idle: ${JSON.stringify(types)}`,
+  );
+  return types;
+}
 
 export async function verifyTurns(
   context: Plugin.Context,
   bridge: ReturnType<typeof createClientBridge>,
-  started: Promise<void>,
-): Promise<
-  Readonly<Record<"turns" | "errors" | "cancellation" | "events" | "compaction", "passed">>
-> {
+  model: ClientModel,
+): Promise<Readonly<Record<Scenario, "passed">>> {
   const client = bridge.input.client;
-  const eventError = Promise.withResolvers<Event>();
-  await bridge.start({
-    async event({ event }) {
-      if (event.type === LegacyEventType.SessionError) eventError.resolve(event);
-    },
+  const probes = new Map<string, unknown>();
+  const rejectErrorsOf = new Set<string>();
+  const log = new EventLog(async (event) => {
+    if (
+      event.type === LegacyEventType.SessionError &&
+      rejectErrorsOf.has(event.properties.sessionID ?? "")
+    )
+      throw new Error("fixture event handler failure");
+    if (
+      event.type === LegacyEventType.SessionStatus &&
+      event.properties.status.type === SessionStatusKind.Retry
+    )
+      probes.set(
+        event.properties.sessionID,
+        (await client.session.status()).data?.[event.properties.sessionID],
+      );
   });
+  await bridge.start(log.sink);
   const create = async () => {
     const response = await client.session.create({ body: { title: "client turn" } });
     assert.ok(response.data, JSON.stringify(response.error));
@@ -39,8 +78,10 @@ export async function verifyTurns(
     system: "fixture-system",
     maxOutputTokens: 99,
   };
+  const toolLoop = log.mark();
   const reply = await client.session.prompt({ path: { id: success.id }, body: prompt });
   assert.ok(reply.data, JSON.stringify(reply.error));
+  await log.until(idleOf(success.id), "idle after a tool loop", toolLoop);
   assert.ok(
     reply.data.parts.some(
       (part) => part.type === PartKind.Text && part.text === "client boundary reply",
@@ -60,11 +101,35 @@ export async function verifyTurns(
       read.state.output.includes("client fixture content"),
   );
 
+  const compaction = log.mark();
   const compacted = await client.session.summarize({
     path: { id: success.id },
     body: { providerID: "omsago-test", modelID: "scripted" },
   });
   assert.equal(compacted.data, true, JSON.stringify(compacted.error));
+  await log.until(
+    (event) =>
+      event.type === LegacyEventType.SessionCompacted && event.properties.sessionID === success.id,
+    "session.compacted",
+    compaction,
+  );
+  await log.until(idleOf(success.id), "idle after compaction", compaction);
+  const lifecycle: string[] = [
+    LegacyEventType.SessionStatus,
+    LegacyEventType.SessionCompacted,
+    LegacyEventType.SessionIdle,
+  ];
+  assert.deepEqual(
+    settledOrder(log.since(compaction, success.id)).filter((type) =>
+      lifecycle.some((prefix) => type.startsWith(prefix)),
+    ),
+    [
+      `${LegacyEventType.SessionStatus}:${SessionStatusKind.Busy}`,
+      LegacyEventType.SessionCompacted,
+      `${LegacyEventType.SessionStatus}:${SessionStatusKind.Idle}`,
+      LegacyEventType.SessionIdle,
+    ],
+  );
   const compactedHistory = await context.session.context({ sessionID: success.id });
   assert.ok(
     compactedHistory.some(
@@ -88,6 +153,8 @@ export async function verifyTurns(
   assert.match(JSON.stringify(rejected.error), /summary did not match the required template/);
 
   const failed = await create();
+  rejectErrorsOf.add(failed.id);
+  const failure = log.mark();
   await client.session.prompt({
     path: { id: failed.id },
     body: { parts: [{ type: ContentKind.Text, text: "CLIENT_FAILURE" }] },
@@ -101,18 +168,21 @@ export async function verifyTurns(
         message.info.error.data["message"].includes("scripted model failure"),
     ) === true,
   );
-  const observed = await eventError.promise;
+  await log.until(idleOf(failed.id), "idle after a failed turn", failure);
+  const failedOrder = settledOrder(log.since(failure, failed.id));
   assert.ok(
-    observed.type === LegacyEventType.SessionError && observed.properties.sessionID === failed.id,
+    failedOrder.indexOf(LegacyEventType.SessionError) <
+      failedOrder.lastIndexOf(LegacyEventType.SessionIdle),
   );
 
   const cancelled = await create();
+  const interruption = log.mark();
   const queued = await client.session.promptAsync({
     path: { id: cancelled.id },
     body: { parts: [{ type: ContentKind.Text, text: "CLIENT_CANCEL" }] },
   });
   assert.equal(queued.response.status, 204);
-  await started;
+  await model.started;
   assert.equal((await client.session.abort({ path: { id: cancelled.id } })).data, true);
   await context.session.wait({ sessionID: cancelled.id });
   assert.equal(
@@ -127,11 +197,85 @@ export async function verifyTurns(
         message.info.error?.name === ErrorName.Aborted,
     ) === true,
   );
+  await log.until(idleOf(cancelled.id), "idle after an interrupted turn", interruption);
+  const interruptedOrder = settledOrder(log.since(interruption, cancelled.id));
+  assert.ok(interruptedOrder.includes(LegacyEventType.SessionError));
+
+  const retried = await create();
+  const retry = log.mark();
+  const retryReply = await client.session.prompt({
+    path: { id: retried.id },
+    body: { parts: [{ type: ContentKind.Text, text: "CLIENT_RETRY" }] },
+  });
+  assert.ok(retryReply.data, JSON.stringify(retryReply.error));
+  await log.until(idleOf(retried.id), "idle after a retried turn", retry);
+  const retryEvents = log.since(retry, retried.id);
+  const scheduled = retryEvents.find(
+    (event) =>
+      event.type === LegacyEventType.SessionStatus &&
+      event.properties.status.type === SessionStatusKind.Retry,
+  );
+  assert.ok(scheduled?.type === LegacyEventType.SessionStatus, JSON.stringify(retryEvents));
+  const status = scheduled.properties.status;
+  assert.ok(status.type === SessionStatusKind.Retry);
+  assert.match(status.message, /scripted capacity failure/);
+  assert.ok(status.attempt >= 1 && status.next > 0, JSON.stringify(status));
+  assert.deepEqual(probes.get(retried.id), status);
+  const resumed = settledOrder(retryEvents).slice(retryEvents.indexOf(scheduled) + 1);
+  assert.equal(resumed[0], `${LegacyEventType.SessionStatus}:${SessionStatusKind.Busy}`);
+  assert.deepEqual((await client.session.status()).data?.[retried.id], {
+    type: SessionStatusKind.Idle,
+  });
+
+  const variants = await create();
+  type PromptBody = NonNullable<Parameters<typeof client.session.prompt>[0]["body"]>;
+  const ask = async (body: PromptBody & { readonly variant?: string }) => {
+    const mark = log.mark();
+    const asked = await client.session.prompt({ path: { id: variants.id }, body });
+    assert.ok(asked.data, JSON.stringify(asked.error));
+    await log.until(idleOf(variants.id), "idle after a variant prompt", mark);
+  };
+  const high = {
+    variant: "high",
+    system: "variant-system",
+    parts: [{ type: ContentKind.Text, text: "CLIENT_VARIANT prompt" }],
+  };
+  await ask(high);
+  assert.equal((await context.session.get({ sessionID: variants.id })).model?.variant, undefined);
+  await ask({ parts: [{ type: ContentKind.Text, text: "CLIENT_VARIANT CLIENT_THINK" }] });
+  const native = log.mark();
+  await context.session.prompt({
+    sessionID: variants.id,
+    text: "CLIENT_VARIANT native",
+    resume: true,
+  });
+  await log.until(idleOf(variants.id), "idle after a native prompt", native);
+  const unknown = {
+    variant: "unknown",
+    parts: [{ type: ContentKind.Text, text: "CLIENT_VARIANT unknown" }],
+  };
+  await ask(unknown);
+  assert.deepEqual(
+    model.variants.map(({ variant, system }) => ({ variant, system })),
+    [
+      { variant: "high", system: true },
+      { variant: "high", system: false },
+      { variant: undefined, system: false },
+      { variant: undefined, system: false },
+    ],
+  );
+  assert.equal(
+    log.since(0, success.id).filter((event) => event.type === LegacyEventType.SessionCompacted)
+      .length,
+    1,
+  );
   return {
     turns: "passed",
     errors: "passed",
     cancellation: "passed",
     events: "passed",
     compaction: "passed",
+    retry: "passed",
+    variants: "passed",
   } as const;
 }

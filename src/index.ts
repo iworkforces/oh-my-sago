@@ -3,13 +3,16 @@ import { omoPlugin } from "oh-my-openagent";
 import { createClientBridge } from "./client/index.js";
 import { registerDomains } from "./domains/index.js";
 import { registerSessions } from "./session/index.js";
+import { toastRpc } from "./toast.js";
 import { registerUserDiscovery } from "./user-discovery.js";
 
 export default Plugin.define({
   id: "omsago",
   async setup(context) {
-    const bridge = createClientBridge(context);
     await using stack = new AsyncDisposableStack();
+    const toasts = await context.rpc.register(toastRpc, {});
+    stack.defer(toasts.dispose);
+    const bridge = createClientBridge(context, toasts.events);
     stack.defer(bridge.dispose);
     const discovery = await registerUserDiscovery(context);
     stack.defer(discovery.dispose);

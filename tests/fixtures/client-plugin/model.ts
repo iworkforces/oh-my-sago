@@ -1,10 +1,45 @@
 import assert from "node:assert/strict";
 import { APICallError } from "@ai-sdk/provider";
-import { ContentKind, MessageRole } from "../../../src/enums.js";
-import { aborted, answer, type Script } from "../scripted-provider.js";
+import { ContentKind, MessageRole, NativeTool, TodoStatus } from "../../../src/enums.js";
+import { aborted, answer, type Script, variantHeader } from "../scripted-provider.js";
 
-export function clientModel(): { readonly script: Script; readonly started: Promise<void> } {
+export const clientVariants = ["low", "high"] as const;
+export const fixtureTodos = [
+  { content: "plan the refactor", status: TodoStatus.InProgress },
+  { content: "ship the refactor", status: TodoStatus.Pending },
+] as const;
+
+export interface VariantRequest {
+  readonly text: string;
+  readonly variant: string | undefined;
+  readonly system: boolean;
+}
+
+export interface ClientModel {
+  readonly script: Script;
+  readonly started: Promise<void>;
+  readonly variants: readonly VariantRequest[];
+}
+
+function toolCall(name: string, input: unknown): Awaited<ReturnType<Script>> {
+  return {
+    ...answer(""),
+    content: [
+      {
+        type: ContentKind.ToolCall,
+        toolCallId: `client-${name}`,
+        toolName: name,
+        input: JSON.stringify(input),
+      },
+    ],
+    finishReason: { unified: "tool-calls", raw: "tool_calls" },
+  };
+}
+
+export function clientModel(): ClientModel {
   const started = Promise.withResolvers<void>();
+  const variants: VariantRequest[] = [];
+  let retries = 0;
   const script: Script = async (request) => {
     const text = request.prompt
       .flatMap((message) =>
@@ -25,7 +60,26 @@ export function clientModel(): { readonly script: Script; readonly started: Prom
           ? "invalid summary"
           : "## Objective\n- fixture summary",
       );
-    if (text.includes("CLIENT_FAILURE")) throw new ScriptFailure();
+    const answered = request.prompt.some((message) => message.role === MessageRole.Tool);
+    if (text.includes("CLIENT_VARIANT"))
+      variants.push({
+        text,
+        variant: request.headers?.[variantHeader],
+        system: request.prompt.some(
+          (message) =>
+            message.role === MessageRole.System && message.content.includes("variant-system"),
+        ),
+      });
+    if (text.includes("CLIENT_RETRY") && retries++ === 0) throw new ScriptFailure(true);
+    if (text.includes("CLIENT_TODO") && !answered) {
+      assert.ok(request.tools?.some((tool) => tool.name === NativeTool.TodoWrite) === true);
+      return toolCall(NativeTool.TodoWrite, {
+        todos: text.includes("CLIENT_TODO_INVALID")
+          ? [{ content: "invalid", status: "unknown" }]
+          : fixtureTodos,
+      });
+    }
+    if (text.includes("CLIENT_FAILURE")) throw new ScriptFailure(false);
     if (text.includes("CLIENT_CANCEL")) {
       const signal = request.abortSignal;
       signal?.throwIfAborted();
@@ -45,39 +99,27 @@ export function clientModel(): { readonly script: Script; readonly started: Prom
             message.content.includes("system hook"),
         ),
       );
-      if (!request.prompt.some((message) => message.role === MessageRole.Tool)) {
+      if (!answered) {
         const read = request.tools?.find(
           (tool) => tool.name === "read_file" || tool.name === "read",
         );
         assert.ok(read);
-        const input = { path: "client.txt" };
-        return {
-          ...answer(""),
-          content: [
-            {
-              type: ContentKind.ToolCall,
-              toolCallId: "client-read",
-              toolName: read.name,
-              input: JSON.stringify(input),
-            },
-          ],
-          finishReason: { unified: "tool-calls", raw: "tool_calls" },
-        };
+        return toolCall(read.name, { path: "client.txt" });
       }
     }
     return answer("client boundary reply");
   };
-  return { script, started: started.promise };
+  return { script, started: started.promise, variants };
 }
 
 class ScriptFailure extends APICallError {
-  constructor() {
+  constructor(retryable: boolean) {
     super({
-      message: "scripted model failure",
+      message: retryable ? "scripted capacity failure" : "scripted model failure",
       url: "https://omsago-test.invalid/model",
       requestBodyValues: {},
-      statusCode: 400,
-      isRetryable: false,
+      statusCode: retryable ? 503 : 400,
+      isRetryable: retryable,
     });
   }
 }

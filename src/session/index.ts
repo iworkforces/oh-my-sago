@@ -1,9 +1,9 @@
-import type { Plugin } from "@opencode/plugin";
+import { Model, type Plugin } from "@opencode/plugin";
 import type { SessionContext, SessionRequest } from "@opencode/plugin/promise/session";
 import type { Hooks } from "@opencode-ai/plugin";
 import type { ClientSessionState } from "../client/state.js";
-import { ContentKind } from "../enums.js";
-import { requestContext } from "./model.js";
+import { ContentKind, SessionRequestKind } from "../enums.js";
+import { offersVariant, requestContext } from "./model.js";
 import { transformMessages } from "./messages.js";
 import { transformPrompt } from "./prompt.js";
 
@@ -30,8 +30,41 @@ export async function registerSessions(
     await transformMessages(event, hooks);
   };
   stack.defer(
-    (await context.session.hook("prompt", (event) => transformPrompt(context, event, hooks)))
-      .dispose,
+    (
+      await context.session.hook("prompt", async (event) => {
+        await transformPrompt(context, event, hooks);
+        state.admit(event.sessionID, event.messageID);
+      })
+    ).dispose,
+  );
+  stack.defer(
+    (
+      await context.session.hook("experimental.idle", (event) => {
+        state.settle(event.sessionID);
+      })
+    ).dispose,
+  );
+  stack.defer(
+    (
+      await context.session.hook("experimental.model.resolve", async (event) => {
+        if (event.kind !== SessionRequestKind.Primary) return;
+        const { sessionID } = event;
+        const variant = await state.variant(sessionID, () =>
+          context.session.context({ sessionID }),
+        );
+        if (
+          variant === undefined ||
+          variant === event.model.variant ||
+          !(await offersVariant(context, event.model, variant))
+        )
+          return;
+        event.model = Model.Ref.make({
+          providerID: event.model.providerID,
+          id: event.model.id,
+          variant: Model.VariantID.make(variant),
+        });
+      })
+    ).dispose,
   );
   const primary = async (event: SessionContext): Promise<void> => {
     state.apply(event);

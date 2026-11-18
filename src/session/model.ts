@@ -7,6 +7,44 @@ import { legacyMessages } from "../client/messages.js";
 import { metadata } from "../domains/value.js";
 import { MessageRole } from "../enums.js";
 
+type ModelSelection = { readonly providerID: string; readonly id: string };
+type Options = { readonly signal: AbortSignal };
+
+export async function offersVariant(
+  context: Plugin.Context,
+  model: ModelSelection,
+  variant: string,
+  options?: Options,
+): Promise<boolean> {
+  const models = await context.model.list(
+    { location: { directory: context.location.directory } },
+    options,
+  );
+  return models.data.some(
+    (entry) =>
+      entry.providerID === model.providerID &&
+      entry.id === model.id &&
+      entry.variants.some((offered) => offered.id === variant),
+  );
+}
+
+export async function switchModelKeepingVariant(
+  context: Plugin.Context,
+  sessionID: string,
+  model: ModelSelection,
+  options?: Options,
+): Promise<void> {
+  const variant = (await context.session.get({ sessionID }, options)).model?.variant;
+  const kept =
+    variant !== undefined && (await offersVariant(context, model, variant, options))
+      ? { variant }
+      : {};
+  await context.session.switchModel(
+    { sessionID, model: { providerID: model.providerID, id: model.id, ...kept } },
+    options,
+  );
+}
+
 export async function requestContext(
   context: Plugin.Context,
   request: Pick<SessionRequest, "sessionID" | "model"> & { readonly agent?: string },

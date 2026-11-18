@@ -12,17 +12,20 @@ import {
   SessionOutcome,
 } from "../enums.js";
 import { body, promptBody, summarizeBody } from "./requests.js";
-import { type ClientSessionState, promptOverrides } from "./state.js";
+import { clientMetadata, promptOverrides } from "./state.js";
 import { nativeAction } from "../domains/permissions.js";
 import { metadata } from "../domains/value.js";
+import { switchModelKeepingVariant } from "../session/model.js";
 
-export function promptRoutes(context: Plugin.Context, state: ClientSessionState) {
+export function promptRoutes(context: Plugin.Context) {
   return async (request: Request, sessionID: string, operation: string): Promise<Response> => {
     const options = { signal: request.signal };
     if (operation === SessionOperation.Summarize) {
       const input = await body(request, summarizeBody);
-      await context.session.switchModel(
-        { sessionID, model: { providerID: input.providerID, id: input.modelID } },
+      await switchModelKeepingVariant(
+        context,
+        sessionID,
+        { providerID: input.providerID, id: input.modelID },
         options,
       );
       const controller = new AbortController();
@@ -91,20 +94,13 @@ export function promptRoutes(context: Plugin.Context, state: ClientSessionState)
     const overrides = promptOverrides.parse(input);
     if (input.noReply === true && operation !== SessionOperation.PromptAsync)
       unsupported("synchronous prompt.noReply response");
-    if (input.variant !== undefined && input.model === undefined)
-      unsupported("prompt.variant without model");
     if (input.agent !== undefined)
       await context.session.switchAgent({ sessionID, agent: input.agent }, options);
     if (input.model !== undefined)
-      await context.session.switchModel(
-        {
-          sessionID,
-          model: {
-            providerID: input.model.providerID,
-            id: input.model.modelID,
-            ...(input.variant === undefined ? {} : { variant: input.variant }),
-          },
-        },
+      await switchModelKeepingVariant(
+        context,
+        sessionID,
+        { providerID: input.model.providerID, id: input.model.modelID },
         options,
       );
     if (input.tools !== undefined) {
@@ -156,7 +152,6 @@ export function promptRoutes(context: Plugin.Context, state: ClientSessionState)
           assertNever(part);
       }
     }
-    state.set(sessionID, overrides);
     const admission = await context.session.prompt(
       {
         sessionID,
@@ -164,7 +159,7 @@ export function promptRoutes(context: Plugin.Context, state: ClientSessionState)
         files,
         agents,
         ...(input.messageID === undefined ? {} : { id: input.messageID }),
-        metadata: { "omsago.client": metadata(overrides) },
+        metadata: { [clientMetadata]: metadata(overrides) },
         resume: input.noReply !== true,
       },
       options,
