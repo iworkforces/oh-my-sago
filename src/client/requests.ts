@@ -1,3 +1,4 @@
+import { PartKind, permissionEffects } from "../enums.js";
 import { z } from "zod";
 
 export const model = z.object({ providerID: z.string(), modelID: z.string() }).strict();
@@ -5,7 +6,7 @@ export const nativeModel = z
   .object({ providerID: z.string(), id: z.string(), variant: z.string().optional() })
   .strict();
 export const permission = z
-  .object({ permission: z.string(), pattern: z.string(), action: z.enum(["allow", "deny", "ask"]) })
+  .object({ permission: z.string(), pattern: z.string(), action: z.enum(permissionEffects) })
   .strict();
 export const createBody = z
   .object({
@@ -27,7 +28,7 @@ const mention = z.object({ start: z.number(), end: z.number(), value: z.string()
 const part = z.discriminatedUnion("type", [
   z
     .object({
-      type: z.literal("text"),
+      type: z.literal(PartKind.Text),
       id: z.string().optional(),
       text: z.string(),
       synthetic: z.boolean().optional(),
@@ -36,7 +37,7 @@ const part = z.discriminatedUnion("type", [
     .strict(),
   z
     .object({
-      type: z.literal("file"),
+      type: z.literal(PartKind.File),
       id: z.string().optional(),
       mime: z.string(),
       url: z.string(),
@@ -46,7 +47,7 @@ const part = z.discriminatedUnion("type", [
     .strict(),
   z
     .object({
-      type: z.literal("agent"),
+      type: z.literal(PartKind.Agent),
       id: z.string().optional(),
       name: z.string(),
       source: mention.optional(),

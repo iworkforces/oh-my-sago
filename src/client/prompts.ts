@@ -1,6 +1,16 @@
 import type { Plugin } from "@opencode/plugin";
 import { BridgeError, assertNever, unsupported } from "./errors.js";
 import { legacyMessages } from "./messages.js";
+import {
+  ErrorName,
+  MessageRole,
+  PartKind,
+  PermissionEffect,
+  RecordType,
+  SessionEventType,
+  SessionOperation,
+  SessionOutcome,
+} from "../enums.js";
 import { body, promptBody, summarizeBody } from "./requests.js";
 import { type ClientSessionState, promptOverrides } from "./state.js";
 import { nativeAction } from "../domains/permissions.js";
@@ -9,7 +19,7 @@ import { metadata } from "../domains/value.js";
 export function promptRoutes(context: Plugin.Context, state: ClientSessionState) {
   return async (request: Request, sessionID: string, operation: string): Promise<Response> => {
     const options = { signal: request.signal };
-    if (operation === "summarize") {
+    if (operation === SessionOperation.Summarize) {
       const input = await body(request, summarizeBody);
       await context.session.switchModel(
         { sessionID, model: { providerID: input.providerID, id: input.modelID } },
@@ -17,17 +27,16 @@ export function promptRoutes(context: Plugin.Context, state: ClientSessionState)
       );
       const controller = new AbortController();
       const signal = AbortSignal.any([request.signal, controller.signal]);
-      const events = context.event
-        .subscribe({
-          types: [
-            "session.compaction.ended",
-            "session.compaction.failed",
-            "session.execution.interrupted",
-            "session.deleted",
-          ],
-          signal,
-        })
-        [Symbol.asyncIterator]();
+      const subscription = context.event.subscribe({
+        types: [
+          SessionEventType.CompactionEnded,
+          SessionEventType.CompactionFailed,
+          SessionEventType.ExecutionInterrupted,
+          SessionEventType.Deleted,
+        ],
+        signal,
+      });
+      const events = subscription[Symbol.asyncIterator]();
       let pending = events.next();
       await using cleanup = new AsyncDisposableStack();
       cleanup.defer(async () => {
@@ -35,7 +44,10 @@ export function promptRoutes(context: Plugin.Context, state: ClientSessionState)
         try {
           await pending;
         } catch (error) {
-          if (error !== signal.reason && !(error instanceof Error && error.name === "AbortError"))
+          if (
+            error !== signal.reason &&
+            !(error instanceof Error && error.name === ErrorName.Abort)
+          )
             throw error;
         }
         await events.return?.();
@@ -48,23 +60,25 @@ export function promptRoutes(context: Plugin.Context, state: ClientSessionState)
         const event = next.value;
         if (event.data.sessionID === sessionID) {
           switch (event.type) {
-            case "session.compaction.failed":
+            case SessionEventType.CompactionFailed:
               if (event.data.inputID === admitted.id)
                 throw new BridgeError(500, event.data.error.message);
               break;
-            case "session.compaction.ended": {
+            case SessionEventType.CompactionEnded: {
               const records = await context.session.context({ sessionID }, options);
               if (
-                records.some((record) => record.id === admitted.id && record.type === "compaction")
+                records.some(
+                  (record) => record.id === admitted.id && record.type === RecordType.Compaction,
+                )
               ) {
                 await context.session.wait({ sessionID }, options);
                 return Response.json(true);
               }
               break;
             }
-            case "session.execution.interrupted":
+            case SessionEventType.ExecutionInterrupted:
               throw new BridgeError(409, "Session compaction was interrupted");
-            case "session.deleted":
+            case SessionEventType.Deleted:
               throw new BridgeError(404, "Session was deleted during compaction");
             default:
               assertNever(event);
@@ -75,7 +89,7 @@ export function promptRoutes(context: Plugin.Context, state: ClientSessionState)
     }
     const input = await body(request, promptBody);
     const overrides = promptOverrides.parse(input);
-    if (input.noReply === true && operation !== "prompt_async")
+    if (input.noReply === true && operation !== SessionOperation.PromptAsync)
       unsupported("synchronous prompt.noReply response");
     if (input.variant !== undefined && input.model === undefined)
       unsupported("prompt.variant without model");
@@ -103,7 +117,7 @@ export function promptRoutes(context: Plugin.Context, state: ClientSessionState)
             ...Object.entries(input.tools).map(([tool, enabled]) => ({
               action: nativeAction(tool),
               resource: "*",
-              effect: enabled ? ("allow" as const) : ("deny" as const),
+              effect: enabled ? PermissionEffect.Allow : PermissionEffect.Deny,
             })),
           ],
         },
@@ -115,16 +129,16 @@ export function promptRoutes(context: Plugin.Context, state: ClientSessionState)
     const texts: string[] = [];
     for (const part of input.parts) {
       switch (part.type) {
-        case "text":
+        case PartKind.Text:
           if (part.ignored !== true) texts.push(part.text);
           break;
-        case "file":
+        case PartKind.File:
           files.push({
             uri: part.url,
             ...(part.filename === undefined ? {} : { name: part.filename }),
           });
           break;
-        case "agent":
+        case PartKind.Agent:
           agents.push({
             name: part.name,
             ...(part.source === undefined
@@ -155,7 +169,7 @@ export function promptRoutes(context: Plugin.Context, state: ClientSessionState)
       },
       options,
     );
-    if (operation === "prompt_async") return new Response(null, { status: 204 });
+    if (operation === SessionOperation.PromptAsync) return new Response(null, { status: 204 });
     await context.session.wait({ sessionID }, options);
     const session = await context.session.get({ sessionID }, options);
     const records = await context.session.context({ sessionID }, options);
@@ -163,19 +177,20 @@ export function promptRoutes(context: Plugin.Context, state: ClientSessionState)
     const userIndex = messages.findIndex((message) => message.info.id === admission.id);
     const assistant = messages
       .slice(userIndex + 1)
-      .findLast((message) => message.info.role === "assistant");
+      .findLast((message) => message.info.role === MessageRole.Assistant);
     if (userIndex < 0 || assistant === undefined)
       throw new BridgeError(
         500,
         `Prompt ${admission.id} produced no assistant message (${session.outcome ?? "unknown"})`,
       );
     if (
-      assistant.info.role === "assistant" &&
+      assistant.info.role === MessageRole.Assistant &&
       assistant.info.error === undefined &&
-      session.outcome !== "succeeded"
+      session.outcome !== SessionOutcome.Succeeded
     ) {
       assistant.info.error = {
-        name: session.outcome === "interrupted" ? "MessageAbortedError" : "UnknownError",
+        name:
+          session.outcome === SessionOutcome.Interrupted ? ErrorName.Aborted : ErrorName.Unknown,
         data: { message: `Session ${session.outcome ?? "did not succeed"}` },
       };
     }
