@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { OpenCode } from "@opencode/client";
 import { z } from "zod";
 import {
   NativeAction,
@@ -94,6 +95,44 @@ assert.ok(
     (part) => part.type === PartKind.Tool && part.state?.status === ToolStateStatus.Error,
   ),
 );
+
+const subscription = new AbortController();
+const opencode = OpenCode.make({ baseUrl: host.url, fetch: host.locationFetch });
+const stream = opencode.event.subscribe({ types: ["form.created"], signal: subscription.signal });
+const events = stream[Symbol.asyncIterator]();
+try {
+  const connected = await events.next();
+  assert.ok(connected.done !== true && connected.value.type === "server.connected");
+  const pending = events.next();
+  const asking = sessionInfo.parse(
+    await host.request("/api/session", {
+      location: { directory },
+      model: { providerID: "omsago-test", id: "scripted" },
+    }),
+  ).data;
+  await host.request(`/api/session/${asking.id}/prompt`, { text: "Ask a question." });
+  const timer = setTimeout(() => {
+    subscription.abort(new Error("No form.created event reached the subscriber"));
+  }, 10_000);
+  const created = await pending.finally(() => {
+    clearTimeout(timer);
+  });
+  assert.ok(created.done !== true && created.value.type === "form.created");
+  assert.equal(
+    created.value.location?.directory,
+    directory,
+    "The native TUI only shows forms whose event carries a location.",
+  );
+  await opencode.session.form.cancel({
+    sessionID: asking.id,
+    formID: created.value.data.form.id,
+    message: "fixture",
+  });
+  await host.request(`/api/session/${asking.id}/command`, { name: "fixture-wait", text: "" });
+} finally {
+  subscription.abort();
+  await events.return?.();
+}
 
 const command = sessionInfo.parse(
   await host.request("/api/session", {

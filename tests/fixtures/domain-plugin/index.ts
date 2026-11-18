@@ -40,6 +40,35 @@ const hooks: Hooks = {
 let calls = 0;
 const provider = scriptedProvider(async (request) => {
   if (request.prompt.some((message) => message.role === MessageRole.Tool)) return answer("done");
+  if (
+    request.prompt.some(
+      (message) =>
+        message.role === MessageRole.User &&
+        message.content.some(
+          (part) => part.type === ContentKind.Text && part.text.includes("Ask a question."),
+        ),
+    )
+  )
+    return {
+      ...answer(""),
+      content: [
+        {
+          type: ContentKind.ToolCall,
+          toolCallId: "question-1",
+          toolName: "question",
+          input: JSON.stringify({
+            questions: [
+              {
+                question: "Continue?",
+                header: "Continue",
+                options: [{ label: "Yes", description: "Keep going" }],
+              },
+            ],
+          }),
+        },
+      ],
+      finishReason: { unified: "tool-calls", raw: "tool_calls" },
+    };
   calls += 1;
   return {
     ...answer(""),

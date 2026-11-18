@@ -84,19 +84,21 @@ export async function prepareTools(
   const definitions = [...(await context.tool.list()), ...tools];
   const prepared: Info[] = [];
   for (const definition of definitions) {
-    const output = {
-      description: definition.description,
-      parameters: inputSchema(definition.input),
-    };
-    await hooks["tool.definition"]?.(
-      {
-        toolID: legacyName(
-          "id" in definition && typeof definition.id === "string" ? definition.id : definition.name,
-        ),
-      },
-      output,
-    );
-    prepared.push({ ...definition, description: output.description, input: output.parameters });
+    const id = "id" in definition && typeof definition.id === "string" ? definition.id : undefined;
+    const native = id !== undefined;
+    const parameters = inputSchema(definition.input);
+    const schema = JSON.stringify(parameters);
+    const output = { description: definition.description, parameters };
+    await hooks["tool.definition"]?.({ toolID: legacyName(id ?? definition.name) }, output);
+    const reshaped = JSON.stringify(output.parameters) !== schema;
+    // The Promise editor rewraps an updated tool's execute on the plugin runtime, which drops the
+    // caller's context; native events such as `form.created` then lose the location the TUI needs.
+    if (native && !reshaped && output.description === definition.description) continue;
+    prepared.push({
+      ...definition,
+      description: output.description,
+      input: native && !reshaped ? definition.input : output.parameters,
+    });
   }
   return prepared;
 }
