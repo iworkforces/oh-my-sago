@@ -4,16 +4,12 @@
 `oh-my-openagent` runtime through a compatibility bridge. It reuses OmO's agents,
 prompts, tools, hooks, and managers rather than maintaining copies of them.
 
-The current compatibility target is **OpenCode 2.3.0** with
-**oh-my-openagent 5.1.75**. This is the first server milestone, not complete v1
-plugin or TUI compatibility.
-
 ## Local installation
 
 Use Bun 1.4.4 or newer and an existing OpenCode 2.3.0 installation:
 
 ```sh
-bun install --frozen-lockfile --ignore-scripts
+bun install
 bun run build
 ```
 
@@ -26,7 +22,7 @@ Add this repository's **directory**, after building it, to your OpenCode v2 conf
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugins": ["/absolute/path/to/oh-my-sago"]
+  "plugins": ["omsg@latest"]
 }
 ```
 
@@ -44,7 +40,7 @@ literal `[opencode]` key. For example:
 {
   "[opencode]": {
     "agents": {
-      "sisyphus": { "model": "anthropic/claude-sonnet-4-6" }
+      "sisyphus": { "model": "openai/gpt-6.2-astra" }
     }
   }
 }
