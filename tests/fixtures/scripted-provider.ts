@@ -5,7 +5,10 @@ import { assertNever } from "../../src/client/errors.js";
 type LanguageModelV3 = NonNullable<AISDKHooks["language"]["language"]>;
 type LanguageModelV3CallOptions = Parameters<LanguageModelV3["doGenerate"]>[0];
 type LanguageModelV3GenerateResult = Awaited<ReturnType<LanguageModelV3["doGenerate"]>>;
-type LanguageModelV3StreamPart = Awaited<ReturnType<LanguageModelV3["doStream"]>>["stream"] extends ReadableStream<infer Part> ? Part : never;
+type LanguageModelV3StreamPart =
+  Awaited<ReturnType<LanguageModelV3["doStream"]>>["stream"] extends ReadableStream<infer Part>
+    ? Part
+    : never;
 
 export type Script = (
   request: LanguageModelV3CallOptions,
@@ -89,9 +92,7 @@ export function scriptedProvider(script: Script): Plugin.Plugin {
             activation: "enabled",
             package: "aisdk:omsg-test",
           },
-          models: [
-            { ...Model.Info.default(providerID, modelID), package: "aisdk:omsg-test" },
-          ],
+          models: [{ ...Model.Info.default(providerID, modelID), package: "aisdk:omsg-test" }],
         });
       });
       await context.aisdk.hook(
