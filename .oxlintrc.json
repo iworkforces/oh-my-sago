@@ -27,6 +27,21 @@
   "ignorePatterns": ["node_modules/**", "dist/**", "build/**", "coverage/**", "vendor/**"],
   "overrides": [
     {
+      "files": ["**/*.ts"],
+      "rules": {
+        "typescript/no-unsafe-assignment": "error",
+        "typescript/no-unsafe-return": "error",
+        "typescript/no-unsafe-call": "error",
+        "typescript/no-unsafe-member-access": "error",
+        "typescript/no-unsafe-argument": "error",
+        "typescript/explicit-module-boundary-types": "error",
+        "typescript/only-throw-error": "error",
+        "typescript/prefer-promise-reject-errors": "error",
+        "typescript/strict-boolean-expressions": "error",
+        "typescript/no-confusing-void-expression": "error"
+      }
+    },
+    {
       "files": ["src/**/*"],
       "rules": { "programming/no-em-dash-copy": "error" }
     },
