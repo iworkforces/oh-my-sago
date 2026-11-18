@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, symlink } from "node:fs/promises";
+import { mkdir, realpath, symlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -157,7 +157,7 @@ assert.equal(
 );
 assert.equal(
   skills.find((skill) => skill.name === "discovery-symlink")?.path,
-  join(target, "SKILL.md"),
+  await realpath(join(target, "SKILL.md")),
 );
 assert.equal(skills.find((skill) => skill.name === "discovery-skill-1")?.autoinvoke, false);
 
