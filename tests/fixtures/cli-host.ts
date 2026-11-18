@@ -25,12 +25,15 @@ export function cliVersion(): string {
 
 export interface CliHost extends AsyncDisposable {
   readonly runtime: string;
+  readonly url: string;
+  readonly locationFetch: typeof globalThis.fetch;
   request(path: string, body?: Json): Promise<Json | undefined>;
 }
 
 export async function cliHost(
   directory: string,
   plugins: readonly string[] = [fileURLToPath(new URL("./domain-plugin/", import.meta.url))],
+  settings: Readonly<Record<string, Json>> = {},
 ): Promise<CliHost> {
   const installed = cliInstall();
   const version = Bun.spawn([installed.executable, "--version"], {
@@ -45,6 +48,7 @@ export async function cliHost(
   await Bun.write(
     config,
     JSON.stringify({
+      ...settings,
       plugins,
       model: "omsago-test/scripted",
     }),
@@ -118,17 +122,24 @@ export async function cliHost(
       }
     }
     const base = address;
+    const authorization = `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`;
+    const scoped = (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const request = input instanceof Request ? input : new Request(input.toString(), init);
+      const url = new URL(request.url);
+      url.searchParams.set("location[directory]", directory);
+      const located = new Request(url.toString(), request);
+      located.headers.set("authorization", authorization);
+      return fetch(located);
+    };
     return {
       runtime,
+      url: base,
+      locationFetch: Object.assign(scoped, { preconnect: fetch.preconnect }),
       async request(path: string, body?: Json): Promise<Json | undefined> {
         const url = new URL(path, base);
-        url.searchParams.set("location[directory]", directory);
-        const response = await fetch(url, {
+        const response = await scoped(url, {
           method: body === undefined ? "GET" : "POST",
-          headers: {
-            authorization: `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`,
-            "content-type": "application/json",
-          },
+          headers: { "content-type": "application/json" },
           ...(body === undefined ? {} : { body: JSON.stringify(body) }),
           signal: AbortSignal.timeout(60_000),
         });
