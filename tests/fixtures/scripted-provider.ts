@@ -28,6 +28,18 @@ export function answer(text: string): LanguageModelV3GenerateResult {
   };
 }
 
+export function aborted(signal: AbortSignal | undefined): Promise<never> {
+  return new Promise<never>((_resolve, reject) => {
+    signal?.addEventListener(
+      "abort",
+      () => {
+        reject(signal.reason instanceof Error ? signal.reason : new Error(String(signal.reason)));
+      },
+      { once: true },
+    );
+  });
+}
+
 export function scriptedProvider(script: Script): Plugin.Plugin {
   const providerID = Provider.ID.make(testModel.providerID);
   const modelID = Model.ID.make(testModel.id);
@@ -117,8 +129,10 @@ export function scriptedProvider(script: Script): Plugin.Plugin {
 }
 
 class UnsupportedScriptContent extends Error {
-  constructor(readonly contentType: string) {
+  readonly contentType: string;
+  constructor(contentType: string) {
     super(`The scripted test provider cannot stream ${contentType}.`);
     this.name = "UnsupportedScriptContent";
+    this.contentType = contentType;
   }
 }

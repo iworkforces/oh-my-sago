@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { APICallError } from "@ai-sdk/provider";
 import { ContentKind, MessageRole } from "../../../src/enums.js";
-import { answer, type Script } from "../scripted-provider.js";
+import { aborted, answer, type Script } from "../scripted-provider.js";
 
-export function clientModel() {
+export function clientModel(): { readonly script: Script; readonly started: Promise<void> } {
   const started = Promise.withResolvers<void>();
   const script: Script = async (request) => {
     const text = request.prompt
@@ -29,9 +29,7 @@ export function clientModel() {
     if (text.includes("CLIENT_CANCEL")) {
       const signal = request.abortSignal;
       signal?.throwIfAborted();
-      const blocked = new Promise<never>((_resolve, reject) => {
-        signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
-      });
+      const blocked = aborted(signal);
       started.resolve();
       await blocked;
     }
