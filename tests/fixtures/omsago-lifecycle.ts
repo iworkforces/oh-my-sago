@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import { PartKind, ToolStateStatus } from "../../src/enums.js";
-import type { cliHost } from "./cli-host.js";
+import type { CliHost } from "./cli-host.js";
 
 const agents = z.object({ data: z.array(z.object({ id: z.string() })) });
 const session = z.object({ data: z.object({ id: z.string() }) });
@@ -17,7 +17,7 @@ const records = z.object({
             type: z.string(),
             name: z.string().optional(),
             text: z.string().optional(),
-            state: z.object({ status: z.string(), error: z.unknown().optional() }).optional(),
+            state: z.object({ status: z.string(), error: z.json().optional() }).optional(),
           }),
         )
         .optional(),
@@ -26,10 +26,10 @@ const records = z.object({
 });
 
 export async function verifyGuard(
-  host: Awaited<ReturnType<typeof cliHost>>,
+  host: CliHost,
   agent: string,
   directory: string,
-) {
+): Promise<Readonly<Record<"guard", "passed">>> {
   await Bun.write(join(directory, "guard.txt"), "original");
   const created = session.parse(
     await host.request("/api/session", {
@@ -50,10 +50,10 @@ export async function verifyGuard(
 }
 
 export async function verifyLifecycle(
-  host: Awaited<ReturnType<typeof cliHost>>,
+  host: CliHost,
   directory: string,
   plugins: readonly string[],
-) {
+): Promise<Readonly<Record<"lifecycle", "passed">>> {
   const receipts = async () =>
     (await readFile(join(directory, "cleanup.jsonl"), "utf8"))
       .trim()
@@ -131,7 +131,7 @@ export async function verifyLifecycle(
     before,
   );
   const agent = before.find((id) => id.toLowerCase().startsWith("sisyphus"));
-  assert.ok(agent);
+  assert.ok(agent !== undefined);
   const created = session.parse(
     await host.request("/api/session", {
       agent,

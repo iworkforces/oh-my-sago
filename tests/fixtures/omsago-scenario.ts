@@ -8,8 +8,7 @@ import { cliHost } from "./cli-host.js";
 import { verifyDelegation } from "./omsago-delegation.js";
 import { verifyGuard, verifyLifecycle } from "./omsago-lifecycle.js";
 
-const directory = process.argv[2];
-assert.ok(directory);
+const directory = z.string().min(1).parse(process.argv[2]);
 await mkdir(join(directory, ".omo"));
 await Bun.write(
   join(directory, ".omo", "omo.json"),
@@ -91,7 +90,7 @@ const records = z
               state: z
                 .object({
                   status: z.string(),
-                  content: z.unknown().optional(),
+                  content: z.json().optional(),
                   metadata: z.object({ name: z.string().optional() }).optional(),
                 })
                 .optional(),

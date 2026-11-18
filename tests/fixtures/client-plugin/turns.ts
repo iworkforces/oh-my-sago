@@ -18,7 +18,9 @@ export async function verifyTurns(
   context: Plugin.Context,
   bridge: ReturnType<typeof createClientBridge>,
   started: Promise<void>,
-) {
+): Promise<
+  Readonly<Record<"turns" | "errors" | "cancellation" | "events" | "compaction", "passed">>
+> {
   const client = bridge.input.client;
   const eventError = Promise.withResolvers<Event>();
   await bridge.start({
@@ -97,7 +99,7 @@ export async function verifyTurns(
         message.info.role === MessageRole.Assistant &&
         typeof message.info.error?.data["message"] === "string" &&
         message.info.error.data["message"].includes("scripted model failure"),
-    ),
+    ) === true,
   );
   const observed = await eventError.promise;
   assert.ok(
@@ -123,7 +125,7 @@ export async function verifyTurns(
       (message) =>
         message.info.role === MessageRole.Assistant &&
         message.info.error?.name === ErrorName.Aborted,
-    ),
+    ) === true,
   );
   return {
     turns: "passed",

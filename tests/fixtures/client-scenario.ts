@@ -1,10 +1,8 @@
-import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { cliHost } from "./cli-host.js";
 
-const directory = process.argv[2];
-assert.ok(directory);
+const directory = z.string().min(1).parse(process.argv[2]);
 await using host = await cliHost(directory, [
   fileURLToPath(new URL("./client-plugin/", import.meta.url)),
 ]);
@@ -17,6 +15,6 @@ await host.request(`/api/session/${session.id}/command`, {
   text: "",
 });
 const result = z
-  .object({ data: z.object({ metadata: z.record(z.string(), z.unknown()) }) })
+  .object({ data: z.object({ metadata: z.record(z.string(), z.json()) }) })
   .parse(await host.request(`/api/session/${session.id}`)).data;
 console.log(JSON.stringify(result.metadata["omsago.fixture"]));

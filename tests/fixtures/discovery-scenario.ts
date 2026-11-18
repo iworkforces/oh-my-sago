@@ -7,8 +7,7 @@ import { z } from "zod";
 import { PartKind, PermissionEffect, RecordType, ToolStateStatus } from "../../src/enums.js";
 import { cliHost } from "./cli-host.js";
 
-const directory = process.argv[2];
-assert.ok(directory);
+const directory = z.string().min(1).parse(process.argv[2]);
 const sources = [fileURLToPath(new URL("./discovery-plugin/", import.meta.url))];
 await mkdir(join(directory, ".omo"));
 await Bun.write(
@@ -48,7 +47,7 @@ const contextSchema = z.object({
           z.object({
             type: z.string(),
             name: z.string().optional(),
-            state: z.object({ status: z.string(), content: z.unknown().optional() }).optional(),
+            state: z.object({ status: z.string(), content: z.json().optional() }).optional(),
           }),
         )
         .optional(),
@@ -186,7 +185,9 @@ for (const [name, expected] of [
     await host.request(`/api/session/${current.id}/context`),
   ).data;
   assert.ok(
-    records.some((record) => record.type === RecordType.User && record.text?.includes(expected)),
+    records.some(
+      (record) => record.type === RecordType.User && record.text?.includes(expected) === true,
+    ),
     JSON.stringify({ name, expected, records }),
   );
 }

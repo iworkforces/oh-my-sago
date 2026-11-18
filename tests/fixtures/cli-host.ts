@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
+import { type Json, json } from "../../src/domains/value.js";
 
 const require = createRequire(import.meta.url);
 
@@ -22,10 +23,15 @@ export function cliVersion(): string {
   return cliInstall().runtime;
 }
 
+export interface CliHost extends AsyncDisposable {
+  readonly runtime: string;
+  request(path: string, body?: Json): Promise<Json | undefined>;
+}
+
 export async function cliHost(
   directory: string,
   plugins: readonly string[] = [fileURLToPath(new URL("./domain-plugin/", import.meta.url))],
-) {
+): Promise<CliHost> {
   const installed = cliInstall();
   const version = Bun.spawn([installed.executable, "--version"], {
     env: process.env,
@@ -114,7 +120,7 @@ export async function cliHost(
     const base = address;
     return {
       runtime,
-      async request(path: string, body?: unknown) {
+      async request(path: string, body?: Json): Promise<Json | undefined> {
         const url = new URL(path, base);
         url.searchParams.set("location[directory]", directory);
         const response = await fetch(url, {
@@ -128,7 +134,7 @@ export async function cliHost(
         });
         const text = await response.text();
         assert.ok(response.ok, `${response.status} ${url.pathname}: ${text}`);
-        return text ? JSON.parse(text) : undefined;
+        return text === "" ? undefined : json.parse(JSON.parse(text));
       },
       async [Symbol.asyncDispose]() {
         await stop();

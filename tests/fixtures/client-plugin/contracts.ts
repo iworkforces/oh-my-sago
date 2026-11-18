@@ -8,7 +8,7 @@ export async function verifyClient(fixture: {
   readonly context: Plugin.Context;
   readonly bridge: ReturnType<typeof createClientBridge>;
   readonly session: SessionInfo;
-}) {
+}): Promise<Readonly<Record<"discovery" | "sessions" | "pagination", "passed">>> {
   const directory = fixture.context.location.directory;
   {
     const { input } = fixture.bridge;
@@ -21,14 +21,14 @@ export async function verifyClient(fixture: {
     ]);
     assert.equal(project.data?.id, fixture.context.location.project.id);
     assert.equal(project.data?.worktree, fixture.context.location.project.directory);
-    assert.ok(config.data?.agent?.["build"]);
-    assert.ok(providers.data?.connected.includes("omsago-test"));
+    assert.ok(config.data?.agent?.["build"] !== undefined);
+    assert.ok(providers.data?.connected.includes("omsago-test") === true);
     assert.equal(
       providers.data?.all.find((provider) => provider.id === "omsago-test")?.models["scripted"]
         ?.tool_call,
       true,
     );
-    assert.ok(agents.data?.some((agent) => agent.name === "build"));
+    assert.ok(agents.data?.some((agent) => agent.name === "build") === true);
     assert.equal(skills.response.status, 200);
     assert.deepEqual(
       skills.data,
@@ -40,34 +40,32 @@ export async function verifyClient(fixture: {
       })),
     );
     assert.equal(input.$, Bun.$);
-    assert.throws(
-      () =>
-        input.experimental_workspace.register("test", {
-          name: "test",
-          description: "test",
-          configure: (workspace) => workspace,
-          async create() {
-            assert.fail("unused workspace");
-          },
-          async remove() {
-            assert.fail("unused workspace");
-          },
-          target: () => ({ type: "local", directory }),
-        }),
-      /unsupported/,
-    );
+    assert.throws(() => {
+      input.experimental_workspace.register("test", {
+        name: "test",
+        description: "test",
+        configure: (workspace) => workspace,
+        async create() {
+          assert.fail("unused workspace");
+        },
+        async remove() {
+          assert.fail("unused workspace");
+        },
+        target: () => ({ type: "local", directory }),
+      });
+    }, /unsupported/);
   }
   {
     const client = fixture.bridge.input.client;
     const created = await client.session.create({
       body: { parentID: fixture.session.id, title: "child" },
     });
-    if (created.data === undefined) throw created.error;
+    if (created.data === undefined) throw new Error(JSON.stringify(created.error));
     const id = created.data.id;
     const updated = await client.session.update({ path: { id }, body: { title: "renamed" } });
     assert.equal(updated.data?.title, "renamed");
     assert.equal((await client.session.get({ path: { id } })).data?.parentID, fixture.session.id);
-    assert.ok((await client.session.list()).data?.some((session) => session.id === id));
+    assert.ok((await client.session.list()).data?.some((session) => session.id === id) === true);
     assert.deepEqual((await client.session.status()).data?.[id], { type: SessionStatusKind.Idle });
     const todo = await client.session.todo({ path: { id } });
     assert.equal(todo.response.status, 501);
@@ -108,7 +106,7 @@ export async function verifyClient(fixture: {
         [undefined, "page-two"],
       );
       controller.abort();
-      assert.ok(calls.every((call) => call.signal?.aborted));
+      assert.ok(calls.every((call) => call.signal?.aborted === true));
     } finally {
       await bridge.dispose();
     }

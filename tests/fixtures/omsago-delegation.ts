@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { z } from "zod";
 import { PartKind, SessionOutcome, ToolStateStatus } from "../../src/enums.js";
-import type { cliHost } from "./cli-host.js";
+import type { CliHost } from "./cli-host.js";
 
 const session = z.object({
   id: z.string(),
@@ -23,7 +23,10 @@ const records = z.object({
   data: z.array(z.object({ type: z.string(), content: z.array(content).optional() })),
 });
 
-export async function verifyDelegation(host: Awaited<ReturnType<typeof cliHost>>, agent: string) {
+export async function verifyDelegation(
+  host: CliHost,
+  agent: string,
+): Promise<Readonly<Record<"delegation" | "background" | "failure" | "cancellation", "passed">>> {
   for (const mode of ["omsago_SYNC", "omsago_BACKGROUND", "omsago_FAILURE", "omsago_CANCEL"]) {
     const parent = z.object({ data: session }).parse(
       await host.request("/api/session", {

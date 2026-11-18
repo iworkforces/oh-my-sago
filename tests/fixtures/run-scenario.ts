@@ -4,13 +4,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export async function runScenario(script: string) {
+export interface ScenarioResult {
+  readonly exitCode: number;
+  readonly stdout: string;
+  readonly stderr: string;
+}
+
+export async function runScenario(script: string): Promise<ScenarioResult> {
   const root = await mkdtemp(join(tmpdir(), "omsago-scenario-"));
   try {
     const names = ["home", "workspace", "config", "cache", "data", "state", "tmp"];
     await Promise.all(names.map((name) => mkdir(join(root, name))));
     const path = process.env["PATH"];
-    assert.ok(path);
+    assert.ok(path !== undefined && path !== "");
     const child = Bun.spawn(
       [
         process.execPath,

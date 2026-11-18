@@ -9,8 +9,7 @@ import {
 } from "../../src/enums.js";
 import { cliHost } from "./cli-host.js";
 
-const directory = process.argv[2];
-assert.ok(directory);
+const directory = z.string().min(1).parse(process.argv[2]);
 await using host = await cliHost(directory);
 await host.request("/api/model");
 const agents = z.object({
@@ -35,8 +34,8 @@ const records = z.object({
             state: z
               .object({
                 status: z.string(),
-                content: z.unknown().optional(),
-                metadata: z.record(z.string(), z.unknown()).optional(),
+                content: z.json().optional(),
+                metadata: z.record(z.string(), z.json()).optional(),
               })
               .optional(),
           }),
