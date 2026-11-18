@@ -4,20 +4,9 @@
 `oh-my-openagent` runtime through a compatibility bridge. It reuses OmO's agents,
 prompts, tools, hooks, and managers rather than maintaining copies of them.
 
-## Local installation
+## Installation
 
-Use Bun 1.4.4 or newer and an existing OpenCode 2.3.0 installation:
-
-```sh
-bun install
-bun run build
-```
-
-The install command skips dependency lifecycle scripts. The test harness resolves
-the installed native OpenCode executable directly and does not require its package
-shim's postinstall step.
-
-Add this repository's **directory**, after building it, to your OpenCode v2 config:
+Add `omsago` as a OpenCode v2 plugin:
 
 ```json
 {
@@ -46,8 +35,8 @@ literal `[opencode]` key. For example:
 }
 ```
 
-Select a model available in your OpenCode installation. Provider credentials stay
-with OpenCode; the bridge does not implement another authentication system.
+Select a model available in your OpenCode v2 installation. Provider credentials stay
+with OpenCode v2; the bridge does not implement another authentication system.
 
 ## Implemented server behavior
 
