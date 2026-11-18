@@ -8,14 +8,16 @@ import type {
   SessionMessageCompaction,
   SessionMessageInfo,
 } from "@opencode/client";
-import type { SessionRequest } from "@opencode/plugin/promise/session";
+import type { SessionModelResolve, SessionRequest } from "@opencode/plugin/promise/session";
 import type {
   AssistantMessage,
   BadRequestError,
   Config,
+  Event,
   Part,
   SessionStatus,
   ToolPart,
+  TuiShowToastData,
 } from "@opencode-ai/sdk";
 
 /**
@@ -206,10 +208,19 @@ export const SessionEventType = {
   ToolProgress: "session.tool.progress",
   ToolSuccess: "session.tool.success",
   ToolFailed: "session.tool.failed",
+  RetryScheduled: "session.retry.scheduled",
   CompactionEnded: "session.compaction.ended",
   CompactionFailed: "session.compaction.failed",
 } as const satisfies Record<string, Exclude<OpenCodeEvent["type"], "server.connected">>;
 export type SessionEventType = (typeof SessionEventType)[keyof typeof SessionEventType];
+
+export const SessionRequestKind = {
+  Primary: "primary",
+  Compaction: "compaction",
+  Title: "title",
+  Generate: "generate",
+} as const satisfies Record<string, SessionModelResolve["kind"]>;
+export type SessionRequestKind = (typeof SessionRequestKind)[keyof typeof SessionRequestKind];
 
 export const SessionOperation = {
   Abort: "abort",
@@ -217,6 +228,7 @@ export const SessionOperation = {
   PromptAsync: "prompt_async",
   Summarize: "summarize",
   Status: "status",
+  Todo: "todo",
 } as const;
 export type SessionOperation = (typeof SessionOperation)[keyof typeof SessionOperation];
 
@@ -233,10 +245,53 @@ export const LegacyEventType = {
   SessionStatus: "session.status",
   SessionError: "session.error",
   SessionIdle: "session.idle",
+  SessionCompacted: "session.compacted",
   MessageUpdated: "message.updated",
   MessagePartUpdated: "message.part.updated",
-} as const;
+  TodoUpdated: "todo.updated",
+} as const satisfies Record<string, Event["type"]>;
 export type LegacyEventType = (typeof LegacyEventType)[keyof typeof LegacyEventType];
+
+export const NativeTool = {
+  TodoWrite: "todowrite",
+} as const;
+export type NativeTool = (typeof NativeTool)[keyof typeof NativeTool];
+
+export const TodoStatus = {
+  Pending: "pending",
+  InProgress: "in_progress",
+  Completed: "completed",
+  Cancelled: "cancelled",
+} as const;
+export type TodoStatus = (typeof TodoStatus)[keyof typeof TodoStatus];
+export const todoStatuses = [
+  TodoStatus.Pending,
+  TodoStatus.InProgress,
+  TodoStatus.Completed,
+  TodoStatus.Cancelled,
+] as const;
+
+export const TodoPriority = {
+  High: "high",
+  Medium: "medium",
+  Low: "low",
+} as const;
+export type TodoPriority = (typeof TodoPriority)[keyof typeof TodoPriority];
+
+type ToastVariantValue = NonNullable<TuiShowToastData["body"]>["variant"];
+export const ToastVariant = {
+  Info: "info",
+  Success: "success",
+  Warning: "warning",
+  Error: "error",
+} as const satisfies Record<string, ToastVariantValue>;
+export type ToastVariant = (typeof ToastVariant)[keyof typeof ToastVariant];
+export const toastVariants = [
+  ToastVariant.Info,
+  ToastVariant.Success,
+  ToastVariant.Warning,
+  ToastVariant.Error,
+] as const;
 
 export const CompactionStatus = {
   Running: "running",
