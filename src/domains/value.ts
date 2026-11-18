@@ -1,21 +1,27 @@
+import type { Info } from "@opencode/plugin/promise/tool";
 import { Schema } from "effect";
 import { ErrorName } from "../enums.js";
 import { z } from "zod";
 
 export class CompatibilityError extends Error {
-  constructor(readonly feature: string) {
+  readonly feature: string;
+  constructor(feature: string) {
     super(`Legacy configuration is not supported by OpenCode 2.3.0: ${feature}`);
     this.name = ErrorName.Compatibility;
+    this.feature = feature;
   }
 }
 
-export const jsonRecord = z.record(z.string(), z.json());
+export const json = z.json();
+export type Json = z.infer<typeof json>;
+export const jsonRecord = z.record(z.string(), json);
+export type JsonRecord = z.infer<typeof jsonRecord>;
 
-export function metadata(value: unknown): z.infer<typeof jsonRecord> {
+export function metadata(value: object | undefined): JsonRecord {
   return jsonRecord.parse(JSON.parse(JSON.stringify(value ?? {})));
 }
 
-export function inputSchema(value: unknown): z.infer<typeof jsonRecord> {
+export function inputSchema(value: Info["input"]): JsonRecord {
   if (value instanceof z.ZodType) return jsonRecord.parse(z.toJSONSchema(value));
   if (Schema.isSchema(value)) {
     const document = Schema.toJsonSchemaDocument(value);
