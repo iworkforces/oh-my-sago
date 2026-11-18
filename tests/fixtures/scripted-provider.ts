@@ -14,7 +14,7 @@ export type Script = (
   request: LanguageModelV3CallOptions,
 ) => Promise<LanguageModelV3GenerateResult>;
 
-export const testModel = { providerID: "omsg-test", id: "scripted" } as const;
+export const testModel = { providerID: "omsago-test", id: "scripted" } as const;
 
 export function answer(text: string): LanguageModelV3GenerateResult {
   return {
@@ -82,7 +82,7 @@ export function scriptedProvider(script: Script): Plugin.Plugin {
     },
   };
   return Plugin.define({
-    id: "omsg-test-provider",
+    id: "omsago-test-provider",
     async setup(context) {
       await context.provider.transform((editor) => {
         editor.add({
@@ -90,9 +90,9 @@ export function scriptedProvider(script: Script): Plugin.Plugin {
             id: providerID,
             name: providerID,
             activation: "enabled",
-            package: "aisdk:omsg-test",
+            package: "aisdk:omsago-test",
           },
-          models: [{ ...Model.Info.default(providerID, modelID), package: "aisdk:omsg-test" }],
+          models: [{ ...Model.Info.default(providerID, modelID), package: "aisdk:omsago-test" }],
         });
       });
       await context.aisdk.hook(
@@ -110,7 +110,7 @@ export function scriptedProvider(script: Script): Plugin.Plugin {
         { providerID },
       );
       await context.session.hook("title", (event) => {
-        event.result = "omsg test";
+        event.result = "omsago test";
       });
     },
   });

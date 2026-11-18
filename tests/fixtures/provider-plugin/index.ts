@@ -9,7 +9,7 @@ const provider = scriptedProvider(async (request) => {
       (message) =>
         message.role === MessageRole.User &&
         message.content.some(
-          (part) => part.type === ContentKind.Text && part.text.includes("OMSG_GUARD"),
+          (part) => part.type === ContentKind.Text && part.text.includes("omsago_GUARD"),
         ),
     )
   ) {
@@ -33,19 +33,19 @@ const provider = scriptedProvider(async (request) => {
       (message) =>
         message.role === MessageRole.User &&
         message.content.some(
-          (part) => part.type === ContentKind.Text && part.text.includes("OMSG_"),
+          (part) => part.type === ContentKind.Text && part.text.includes("omsago_"),
         ),
     )
   )
     return delegationScript(request);
   if (request.prompt.some((message) => message.role === MessageRole.Tool))
-    return answer("omsg ready");
+    return answer("omsago ready");
   return {
     ...answer(""),
     content: [
       {
         type: ContentKind.ToolCall,
-        toolCallId: "omsg-skill",
+        toolCallId: "omsago-skill",
         toolName: "skill",
         input: JSON.stringify({ name: "git-master" }),
       },

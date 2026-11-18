@@ -40,7 +40,7 @@ export async function cliHost(
     config,
     JSON.stringify({
       plugins,
-      model: "omsg-test/scripted",
+      model: "omsago-test/scripted",
     }),
   );
   const password = crypto.randomUUID();

@@ -1,6 +1,6 @@
 # oh-my-sago
 
-`oh-my-sago` (`omsg`) is an OpenCode v2 server plugin that runs the installed
+`oh-my-sago` (`omsago`) is an OpenCode v2 server plugin that runs the installed
 `oh-my-openagent` runtime through a compatibility bridge. It reuses OmO's agents,
 prompts, tools, hooks, and managers rather than maintaining copies of them.
 
@@ -22,12 +22,12 @@ Add this repository's **directory**, after building it, to your OpenCode v2 conf
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugins": ["@iworkforces/omsg@latest"]
+  "plugins": ["omsago@latest"]
 }
 ```
 
 Replace the example path with your checkout. Do not load `oh-my-openagent` or
-`oh-my-opencode` alongside `omsg`; `omsg` starts OmO itself. Quit and restart
+`oh-my-opencode` alongside `omsago`; `omsago` starts OmO itself. Quit and restart
 OpenCode after changing the plugin configuration. No global configuration is
 changed by the build or tests, and this package has not been published by these
 instructions.

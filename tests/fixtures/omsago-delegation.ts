@@ -24,11 +24,11 @@ const records = z.object({
 });
 
 export async function verifyDelegation(host: Awaited<ReturnType<typeof cliHost>>, agent: string) {
-  for (const mode of ["OMSG_SYNC", "OMSG_BACKGROUND", "OMSG_FAILURE", "OMSG_CANCEL"]) {
+  for (const mode of ["omsago_SYNC", "omsago_BACKGROUND", "omsago_FAILURE", "omsago_CANCEL"]) {
     const parent = z.object({ data: session }).parse(
       await host.request("/api/session", {
         agent,
-        model: { providerID: "omsg-test", id: "scripted" },
+        model: { providerID: "omsago-test", id: "scripted" },
       }),
     ).data;
     await host.request(`/api/session/${parent.id}/prompt`, { text: mode });
@@ -39,7 +39,7 @@ export async function verifyDelegation(host: Awaited<ReturnType<typeof cliHost>>
     const task = parts.find((part) => part.type === PartKind.Tool && part.name === "task");
     assert.equal(task?.state?.status, ToolStateStatus.Completed, JSON.stringify({ mode, parts }));
     assert.ok(
-      parts.some((part) => part.type === PartKind.Text && part.text === "omsg ready"),
+      parts.some((part) => part.type === PartKind.Text && part.text === "omsago ready"),
       JSON.stringify({ mode, parts }),
     );
     const children = z
@@ -55,16 +55,16 @@ export async function verifyDelegation(host: Awaited<ReturnType<typeof cliHost>>
       .parse(await host.request(`/api/session/${child.id}`)).data;
     assert.equal(
       current.outcome,
-      mode === "OMSG_FAILURE"
+      mode === "omsago_FAILURE"
         ? SessionOutcome.Failed
-        : mode === "OMSG_CANCEL"
+        : mode === "omsago_CANCEL"
           ? SessionOutcome.Interrupted
           : SessionOutcome.Succeeded,
     );
     const childParts = records
       .parse(await host.request(`/api/session/${child.id}/context`))
       .data.flatMap((record) => record.content ?? []);
-    if (mode === "OMSG_SYNC" || mode === "OMSG_BACKGROUND")
+    if (mode === "omsago_SYNC" || mode === "omsago_BACKGROUND")
       assert.ok(
         childParts.some((part) => part.type === PartKind.Text && part.text === "child complete"),
       );
@@ -72,7 +72,7 @@ export async function verifyDelegation(host: Awaited<ReturnType<typeof cliHost>>
       assert.ok(
         parts.some(
           (part) =>
-            part.name === (mode === "OMSG_FAILURE" ? "background_output" : "background_cancel") &&
+            part.name === (mode === "omsago_FAILURE" ? "background_output" : "background_cancel") &&
             part.state?.status === ToolStateStatus.Completed,
         ),
       );

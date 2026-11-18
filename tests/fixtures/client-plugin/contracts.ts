@@ -22,9 +22,9 @@ export async function verifyClient(fixture: {
     assert.equal(project.data?.id, fixture.context.location.project.id);
     assert.equal(project.data?.worktree, fixture.context.location.project.directory);
     assert.ok(config.data?.agent?.["build"]);
-    assert.ok(providers.data?.connected.includes("omsg-test"));
+    assert.ok(providers.data?.connected.includes("omsago-test"));
     assert.equal(
-      providers.data?.all.find((provider) => provider.id === "omsg-test")?.models["scripted"]
+      providers.data?.all.find((provider) => provider.id === "omsago-test")?.models["scripted"]
         ?.tool_call,
       true,
     );

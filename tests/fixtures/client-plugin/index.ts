@@ -39,7 +39,7 @@ export default Plugin.define({
             output.temperature = 0.25;
           },
           async "experimental.session.compacting"(_input, output) {
-            output.context.push("OMSG_COMPACTION_CONTEXT");
+            output.context.push("omsago_COMPACTION_CONTEXT");
           },
         },
         bridge.sessionState,
@@ -56,7 +56,7 @@ export default Plugin.define({
               const turns = await verifyTurns(context, bridge, model.started);
               await context.session.update({
                 sessionID: event.sessionID,
-                metadata: { "omsg.fixture": { ...result, ...turns } },
+                metadata: { "omsago.fixture": { ...result, ...turns } },
               });
             },
           });

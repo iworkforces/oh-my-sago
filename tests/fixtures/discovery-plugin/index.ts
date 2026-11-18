@@ -1,5 +1,5 @@
 import { Plugin } from "@opencode/plugin";
-import omsg from "../../../src/index.js";
+import omsago from "../../../src/index.js";
 import { ContentKind, MessageRole } from "../../../src/enums.js";
 import { answer, scriptedProvider } from "../scripted-provider.js";
 
@@ -33,7 +33,7 @@ export default Plugin.define({
     await using scope = new AsyncDisposableStack();
     const providerCleanup = await provider.setup(context);
     if (providerCleanup) scope.defer(providerCleanup);
-    const cleanup = await omsg.setup(context);
+    const cleanup = await omsago.setup(context);
     if (cleanup) scope.defer(cleanup);
     scope.defer(
       (

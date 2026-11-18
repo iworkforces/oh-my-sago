@@ -19,7 +19,7 @@ await Bun.write(
       model_fallback: false,
       disabled_mcps: ["websearch", "context7", "grep_app"],
       disabled_skills: ["security-research", "security-review"],
-      agents: { sisyphus: { model: "omsg-test/scripted" } },
+      agents: { sisyphus: { model: "omsago-test/scripted" } },
     },
   }),
 );
@@ -167,7 +167,7 @@ async function session() {
     await host.request("/api/session", {
       location: { directory },
       agent: "build",
-      model: { providerID: "omsg-test", id: "scripted" },
+      model: { providerID: "omsago-test", id: "scripted" },
       permissions: [{ action: "skill", resource: "*", effect: PermissionEffect.Allow }],
     }),
   ).data;

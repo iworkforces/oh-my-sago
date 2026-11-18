@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "omsg",
+      "name": "omsago",
       "dependencies": {
         "@opencode-ai/sdk": "1.19.6",
         "@opencode/plugin": "2.3.2",

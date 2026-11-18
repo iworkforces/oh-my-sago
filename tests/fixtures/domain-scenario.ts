@@ -66,7 +66,7 @@ async function session(effect: PermissionEffect) {
   return sessionInfo.parse(
     await host.request("/api/session", {
       location: { directory },
-      model: { providerID: "omsg-test", id: "scripted" },
+      model: { providerID: "omsago-test", id: "scripted" },
       agent: "bridge-fixture",
       permissions: [{ action: "bridge_echo", resource: "*", effect }],
     }),
@@ -99,7 +99,7 @@ assert.ok(
 const command = sessionInfo.parse(
   await host.request("/api/session", {
     location: { directory },
-    model: { providerID: "omsg-test", id: "scripted" },
+    model: { providerID: "omsago-test", id: "scripted" },
   }),
 ).data;
 await host.request(`/api/session/${command.id}/command`, {

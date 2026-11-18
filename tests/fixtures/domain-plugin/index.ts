@@ -66,7 +66,7 @@ export default Plugin.define({
       agent: {
         "bridge-fixture": {
           prompt: "Fixture instructions",
-          model: "omsg-test/scripted",
+          model: "omsago-test/scripted",
           permission: { edit: PermissionEffect.Deny },
         },
       },

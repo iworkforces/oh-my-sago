@@ -17,7 +17,7 @@ export function clientModel() {
       request.prompt.some(
         (message) =>
           message.role === MessageRole.System &&
-          message.content.includes("OMSG_COMPACTION_CONTEXT"),
+          message.content.includes("omsago_COMPACTION_CONTEXT"),
       )
     )
       return answer(
@@ -76,7 +76,7 @@ class ScriptFailure extends APICallError {
   constructor() {
     super({
       message: "scripted model failure",
-      url: "https://omsg-test.invalid/model",
+      url: "https://omsago-test.invalid/model",
       requestBodyValues: {},
       statusCode: 400,
       isRetryable: false,

@@ -26,7 +26,7 @@ export function createClientBridge(context: Plugin.Context): ClientBridge {
   const sessionState = new ClientSessionState();
   const sessions = sessionRoutes(context, sessionState);
   const events = clientEvents(context);
-  const serverUrl = new URL("http://omsg.invalid");
+  const serverUrl = new URL("http://omsago.invalid");
   const transport = async (
     input: string | Request | URL,
     init?: RequestInit,

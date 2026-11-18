@@ -19,4 +19,4 @@ await host.request(`/api/session/${session.id}/command`, {
 const result = z
   .object({ data: z.object({ metadata: z.record(z.string(), z.unknown()) }) })
   .parse(await host.request(`/api/session/${session.id}`)).data;
-console.log(JSON.stringify(result.metadata["omsg.fixture"]));
+console.log(JSON.stringify(result.metadata["omsago.fixture"]));

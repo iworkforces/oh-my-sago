@@ -34,10 +34,10 @@ export async function verifyGuard(
   const created = session.parse(
     await host.request("/api/session", {
       agent,
-      model: { providerID: "omsg-test", id: "scripted" },
+      model: { providerID: "omsago-test", id: "scripted" },
     }),
   ).data;
-  await host.request(`/api/session/${created.id}/prompt`, { text: "OMSG_GUARD" });
+  await host.request(`/api/session/${created.id}/prompt`, { text: "omsago_GUARD" });
   await host.request(`/api/session/${created.id}/command`, { name: "fixture-wait", text: "" });
   const parts = records
     .parse(await host.request(`/api/session/${created.id}/context`))
@@ -61,7 +61,7 @@ export async function verifyLifecycle(
       .map((line) =>
         z
           .object({
-            id: z.literal("omsg"),
+            id: z.literal("omsago"),
             event: z.enum(["setup", "cleanup"]),
             instance: z.string(),
             directory: z.string(),
@@ -105,7 +105,7 @@ export async function verifyLifecycle(
   const replaced = await active();
   await Bun.write(
     join(directory, "opencode.json"),
-    JSON.stringify({ plugins: plugins.slice(0, 1), model: "omsg-test/scripted" }),
+    JSON.stringify({ plugins: plugins.slice(0, 1), model: "omsago-test/scripted" }),
   );
   await host.request("/api/location/reload", {});
   await host.request("/api/model");
@@ -119,7 +119,7 @@ export async function verifyLifecycle(
   assert.equal((await active()).length, 0);
   await Bun.write(
     join(directory, "opencode.json"),
-    JSON.stringify({ plugins, model: "omsg-test/scripted" }),
+    JSON.stringify({ plugins, model: "omsago-test/scripted" }),
   );
   await host.request("/api/location/reload", {});
   await host.request("/api/model");
@@ -135,7 +135,7 @@ export async function verifyLifecycle(
   const created = session.parse(
     await host.request("/api/session", {
       agent,
-      model: { providerID: "omsg-test", id: "scripted" },
+      model: { providerID: "omsago-test", id: "scripted" },
     }),
   ).data;
   await host.request(`/api/session/${created.id}/prompt`, {

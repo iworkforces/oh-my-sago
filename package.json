@@ -1,11 +1,11 @@
 {
-  "name": "@iworkforces/omsg",
-  "version": "1.0.3",
+  "name": "omsago",
+  "version": "1.0.4",
   "description": "It codes like a SWEE would, another lobster way 🦞",
   "keywords": [
     "coding-agent",
     "omo",
-    "omsg",
+    "omsago",
     "opencode",
     "typescript"
   ],
