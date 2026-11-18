@@ -28,4 +28,10 @@ const restored = await (async () => {
   await using host = await cliHost(directory, plugins, settings);
   return await command(host, "fixture-client-todo-read", todoSession);
 })();
-console.log(JSON.stringify({ todos: written["todos"], restart: restored["restart"] }));
+console.log(
+  JSON.stringify({
+    todos: written["todos"],
+    todoFailure: written["todoFailure"],
+    restart: restored["restart"],
+  }),
+);

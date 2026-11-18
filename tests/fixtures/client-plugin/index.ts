@@ -5,6 +5,7 @@ import { toastRpc } from "../../../src/toast.js";
 import { scriptedProvider } from "../scripted-provider.js";
 import { verifyClient } from "./contracts.js";
 import { clientModel, clientVariants } from "./model.js";
+import { verifyStability, verifyTodoFailure } from "./stability.js";
 import { verifyRestoredTodos, verifyTodos } from "./todos.js";
 import { verifyTurns } from "./turns.js";
 import { registerSessions } from "../../../src/session/index.js";
@@ -71,14 +72,16 @@ export default Plugin.define({
               const session = await context.session.get({ sessionID: event.sessionID });
               const result = await verifyClient({ context, bridge, session });
               const turns = await verifyTurns(context, bridge, model);
-              await report(event.sessionID, { ...result, ...turns });
+              const stability = await verifyStability(context, bridge);
+              await report(event.sessionID, { ...result, ...turns, ...stability });
             },
           });
           editor.add({
             name: "fixture-client-todos",
             async execute(event) {
               const todoSession = await verifyTodos(context, bridge);
-              await report(event.sessionID, { todos: "passed", todoSession });
+              const todoFailure = await verifyTodoFailure(context, bridge);
+              await report(event.sessionID, { todos: "passed", todoFailure, todoSession });
             },
           });
           editor.add({

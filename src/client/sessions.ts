@@ -15,6 +15,11 @@ export function legacySession(session: SessionInfo): Session {
   };
 }
 
+export function isBusy(session: SessionInfo): boolean {
+  const { busy, idle } = session.time;
+  return busy !== undefined && (idle === undefined || busy > idle);
+}
+
 export type RetryStatus = Extract<SessionStatus, { type: typeof SessionStatusKind.Retry }>;
 
 /** Pending provider retries, shared by one bridge's event loop and its status route. */
@@ -30,10 +35,7 @@ export class SessionRetries {
   status(session: SessionInfo): SessionStatus {
     const retry = this.#pending.get(session.id);
     if (retry !== undefined) return retry;
-    const { busy, idle } = session.time;
-    return busy !== undefined && (idle === undefined || busy > idle)
-      ? { type: SessionStatusKind.Busy }
-      : { type: SessionStatusKind.Idle };
+    return isBusy(session) ? { type: SessionStatusKind.Busy } : { type: SessionStatusKind.Idle };
   }
 }
 

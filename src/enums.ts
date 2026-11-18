@@ -310,6 +310,8 @@ export const ErrorName = {
   Abort: "AbortError",
   Bridge: "BridgeError",
   Compatibility: "CompatibilityError",
+  /** The runtime's name for a missing session; the generated client types say `SessionNotFoundError`. */
+  SessionNotFound: "Session.NotFoundError",
 } as const satisfies Record<
   string,
   | NonNullable<AssistantMessage["error"]>["name"]
@@ -317,5 +319,6 @@ export const ErrorName = {
   | "AbortError"
   | "BridgeError"
   | "CompatibilityError"
+  | "Session.NotFoundError"
 >;
 export type ErrorName = (typeof ErrorName)[keyof typeof ErrorName];

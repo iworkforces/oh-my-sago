@@ -26,7 +26,7 @@ type Scenario =
   | "retry"
   | "variants";
 
-function settledOrder(events: readonly LegacyEvent[]): string[] {
+export function settledOrder(events: readonly LegacyEvent[]): string[] {
   const types = events.map((event) =>
     event.type === LegacyEventType.SessionStatus
       ? `${event.type}:${event.properties.status.type}`
