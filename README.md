@@ -22,7 +22,7 @@ Add this repository's **directory**, after building it, to your OpenCode v2 conf
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugins": ["omsg@latest"]
+  "plugins": ["@iworkforces/omsg@latest"]
 }
 ```
 
