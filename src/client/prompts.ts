@@ -55,7 +55,7 @@ export function promptRoutes(context: Plugin.Context, state: ClientSessionState)
       const admitted = await context.session.compact({ sessionID }, options);
       for (;;) {
         const next = await pending;
-        if (next.done)
+        if (next.done === true)
           throw new BridgeError(500, "Session compaction subscription ended before completion");
         const event = next.value;
         if (event.data.sessionID === sessionID) {
