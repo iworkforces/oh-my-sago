@@ -15,6 +15,7 @@ export type Script = (
 ) => Promise<LanguageModelV3GenerateResult>;
 
 export const testModel = { providerID: "omsago-test", id: "scripted" } as const;
+export const variantHeader = "x-omsago-variant";
 
 export function answer(text: string): LanguageModelV3GenerateResult {
   return {
@@ -40,7 +41,7 @@ export function aborted(signal: AbortSignal | undefined): Promise<never> {
   });
 }
 
-export function scriptedProvider(script: Script): Plugin.Plugin {
+export function scriptedProvider(script: Script, variants: readonly string[] = []): Plugin.Plugin {
   const providerID = Provider.ID.make(testModel.providerID);
   const modelID = Model.ID.make(testModel.id);
   const model: LanguageModelV3 = {
@@ -104,7 +105,16 @@ export function scriptedProvider(script: Script): Plugin.Plugin {
             activation: "enabled",
             package: "aisdk:omsago-test",
           },
-          models: [{ ...Model.Info.default(providerID, modelID), package: "aisdk:omsago-test" }],
+          models: [
+            {
+              ...Model.Info.default(providerID, modelID),
+              package: "aisdk:omsago-test",
+              variants: variants.map((id) => ({
+                id: Model.VariantID.make(id),
+                headers: { [variantHeader]: id },
+              })),
+            },
+          ],
         });
       });
       await context.aisdk.hook(
