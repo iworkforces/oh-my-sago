@@ -7,6 +7,18 @@ import { offersVariant, requestContext } from "./model.js";
 import { transformMessages } from "./messages.js";
 import { transformPrompt } from "./prompt.js";
 
+type SystemPart = SessionRequest["system"][number];
+
+/** Gives each unchanged text its original part, using each part at most once; new text is plain. */
+function systemParts(original: readonly SystemPart[], texts: readonly string[]): SystemPart[] {
+  const unused = [...original];
+  return texts.map((text) => {
+    const index = unused.findIndex((part) => part.text === text);
+    const [part] = index === -1 ? [] : unused.splice(index, 1);
+    return part ?? { type: ContentKind.Text, text };
+  });
+}
+
 export async function registerSessions(
   context: Plugin.Context,
   hooks: Hooks,
@@ -14,20 +26,20 @@ export async function registerSessions(
 ): Promise<() => Promise<void>> {
   await using stack = new AsyncDisposableStack();
   const request = async (event: SessionRequest): Promise<void> => {
-    const output = { system: event.system.map((part) => part.text) };
+    let system = event.system;
     if (hooks["experimental.chat.system.transform"] !== undefined) {
+      const output = { system: event.system.map((part) => part.text) };
       const input = await requestContext(context, event);
       await hooks["experimental.chat.system.transform"](
         { sessionID: event.sessionID, model: input.model },
         output,
       );
-      event.system = output.system.map((text, index) => ({
-        ...event.system[index],
-        type: ContentKind.Text,
-        text,
-      }));
+      system = systemParts(event.system, output.system);
     }
+    // transformMessages assigns event.messages only after its hook and repair succeed, so a failure
+    // in either transform leaves the request as the host built it.
     await transformMessages(event, hooks);
+    event.system = system;
   };
   stack.defer(
     (
