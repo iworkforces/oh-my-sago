@@ -16,6 +16,8 @@ const nativeTodos = z.array(
   z.object({ content: z.string(), status: z.enum(todoStatuses) }).strip(),
 );
 type NativeTodo = z.infer<typeof nativeTodos>[number];
+/** Native sessions copy their parent's metadata on create and fork, so a list names its owner. */
+const ownedTodos = z.object({ sessionID: z.string(), todos: nativeTodos }).strip();
 type Options = { readonly signal: AbortSignal };
 
 function legacyTodos(todos: readonly NativeTodo[]): Todo[] {
@@ -28,7 +30,10 @@ function legacyTodos(todos: readonly NativeTodo[]): Todo[] {
 
 function storedTodos(session: SessionInfo): NativeTodo[] {
   const stored = session.metadata?.[key];
-  return stored === undefined ? [] : nativeTodos.parse(stored);
+  // A bare array predates the owner field and cannot be told apart from an inherited list.
+  if (stored === undefined || Array.isArray(stored)) return [];
+  const list = ownedTodos.parse(stored);
+  return list.sessionID === session.id ? list.todos : [];
 }
 
 /** Reads the latest list, or none while the `todo` flag keeps `todowrite` unregistered. */
@@ -74,7 +79,7 @@ export async function recordTodos(
   const todos = z.object({ todos: nativeTodos }).parse(tool.state.input).todos;
   const session = await context.session.get({ sessionID }, options);
   await context.session.update(
-    { sessionID, metadata: { ...session.metadata, [key]: todos } },
+    { sessionID, metadata: { ...session.metadata, [key]: { sessionID, todos } } },
     options,
   );
   return legacyTodos(todos);
