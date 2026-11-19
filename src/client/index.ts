@@ -11,6 +11,7 @@ import { type LegacyEventSink, clientEvents } from "./events.js";
 import { body } from "./requests.js";
 import { SessionRetries } from "./sessions.js";
 import { sessionRoutes } from "./session-routes.js";
+import { raceAbort } from "./signal.js";
 import { ClientSessionState } from "./state.js";
 
 export type ClientBridge = {
@@ -22,7 +23,10 @@ export type ClientBridge = {
   };
   readonly sessionState: ClientSessionState;
   readonly start: (hooks: LegacyEventSink) => Promise<void>;
-  readonly dispose: () => Promise<void>;
+  /** Stops event delivery while the legacy client keeps answering requests. */
+  readonly stop: () => Promise<void>;
+  /** Stops event delivery and fails every later legacy client request; idempotent. */
+  readonly close: () => Promise<void>;
 };
 
 export function createClientBridge(context: Plugin.Context, toasts: ToastEmitter): ClientBridge {
@@ -30,6 +34,7 @@ export function createClientBridge(context: Plugin.Context, toasts: ToastEmitter
   const retries = new SessionRetries();
   const sessions = sessionRoutes(context, sessionState, retries);
   const events = clientEvents(context, retries);
+  let closed = false;
   const showToast = async (request: Request): Promise<Response> => {
     const input = await body(request, toast);
     try {
@@ -40,17 +45,7 @@ export function createClientBridge(context: Plugin.Context, toasts: ToastEmitter
     return Response.json(true);
   };
   const serverUrl = new URL("http://omsago.invalid");
-  const transport = async (
-    input: string | Request | URL,
-    init?: RequestInit,
-  ): Promise<Response> => {
-    const request =
-      input instanceof Request
-        ? init === undefined
-          ? input
-          : new Request(input, init)
-        : new Request(input.toString(), init);
-    request.signal.throwIfAborted();
+  const route = async (request: Request): Promise<Response> => {
     try {
       const url = new URL(request.url);
       if (url.origin !== serverUrl.origin)
@@ -66,6 +61,21 @@ export function createClientBridge(context: Plugin.Context, toasts: ToastEmitter
         return errorResponse(new BridgeError(400, error.message));
       return errorResponse(error);
     }
+  };
+  const transport = async (
+    input: string | Request | URL,
+    init?: RequestInit,
+  ): Promise<Response> => {
+    if (closed) throw new BridgeError(503, "The client bridge is closed");
+    const request =
+      input instanceof Request
+        ? init === undefined
+          ? input
+          : new Request(input, init)
+        : new Request(input.toString(), init);
+    request.signal.throwIfAborted();
+    // The caller stops waiting while the route runs on; only POST /session/:id/abort interrupts.
+    return raceAbort(request.signal, route(request));
   };
   const config = {
     baseUrl: serverUrl.href,
@@ -96,6 +106,10 @@ export function createClientBridge(context: Plugin.Context, toasts: ToastEmitter
     input,
     sessionState,
     start: (hooks: LegacyEventSink) => events.start(hooks),
-    dispose: () => events.dispose(),
+    stop: () => events.stop(),
+    close: async () => {
+      closed = true;
+      await events.stop();
+    },
   };
 }

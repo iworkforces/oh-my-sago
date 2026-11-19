@@ -13,11 +13,14 @@ export default Plugin.define({
     const toasts = await context.rpc.register(toastRpc, {});
     stack.defer(toasts.dispose);
     const bridge = createClientBridge(context, toasts.events);
-    stack.defer(bridge.dispose);
+    stack.defer(bridge.close);
     const discovery = await registerUserDiscovery(context);
     stack.defer(discovery.dispose);
     const hooks = await omoPlugin(bridge.input, context.options);
     if (hooks.dispose !== undefined) stack.defer(hooks.dispose);
+    // OmO aborts its child sessions through the legacy client while it shuts down, so events stop
+    // before its dispose and the transport closes only after it.
+    stack.defer(bridge.stop);
     const config = await bridge.input.client.config.get({ throwOnError: true });
     config.data.command = { ...discovery.commands, ...config.data.command };
     stack.defer(await registerDomains(context, hooks, config.data));

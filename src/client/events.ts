@@ -8,6 +8,7 @@ import { ErrorName, LegacyEventType, SessionEventType, SessionStatusKind } from 
 import { BridgeError, assertNever } from "./errors.js";
 import { legacyError, legacyMessages } from "./messages.js";
 import { type SessionRetries, isBusy, legacySession, listSessions } from "./sessions.js";
+import { abortedBy, raceAbort } from "./signal.js";
 import { recordTodos } from "./todos.js";
 
 const types = [
@@ -60,6 +61,14 @@ const passive: ReadonlySet<NativeEvent["type"]> = new Set([
 /** Delay before resubscribing after the native stream fails or ends, doubled per failed attempt. */
 const reconnectDelay = { initialMs: 100, maxMs: 5_000 } as const;
 
+/** How long `start` waits for the seed snapshot and `stop` waits for an event handler in flight. */
+export interface EventBounds {
+  readonly startMs: number;
+  readonly stopMs: number;
+}
+
+const defaultBounds: EventBounds = { startMs: 15_000, stopMs: 5_000 };
+
 interface Connection {
   readonly controller: AbortController;
   /** Whether a resync has caught up on the gap before this connection; only then does backoff reset. */
@@ -83,10 +92,16 @@ export interface LegacyEventSink {
 
 export interface ClientEvents {
   start(hooks: LegacyEventSink): Promise<void>;
-  dispose(): Promise<void>;
+  /** Starts no handler from now on and waits up to `stopMs` for the one in flight; idempotent. */
+  stop(): Promise<void>;
 }
 
-export function clientEvents(context: Plugin.Context, retries: SessionRetries): ClientEvents {
+export function clientEvents(
+  context: Plugin.Context,
+  retries: SessionRetries,
+  bounds: Partial<EventBounds> = {},
+): ClientEvents {
+  const { startMs, stopMs } = { ...defaultBounds, ...bounds };
   const controller = new AbortController();
   const sessions = new Map<string, SessionInfo>();
   const messages = new Map<string, SessionMessagesResponse>();
@@ -95,7 +110,7 @@ export function clientEvents(context: Plugin.Context, retries: SessionRetries): 
   /** Idle times a resync announced; the stream's own settle event for that turn is then a duplicate. */
   const resynced = new Map<string, number>();
   let running: Promise<void> | undefined;
-  let disposed = false;
+  let stopping: Promise<void> | undefined;
   const forget = (sessionID: string): void => {
     sessions.delete(sessionID);
     messages.delete(sessionID);
@@ -103,19 +118,36 @@ export function clientEvents(context: Plugin.Context, retries: SessionRetries): 
     resynced.delete(sessionID);
     retries.clear(sessionID);
   };
+  const halt = async (): Promise<void> => {
+    controller.abort();
+    if (running === undefined) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const expired = new Promise<boolean>((resolve) => {
+      timer = setTimeout(() => {
+        resolve(true);
+      }, stopMs);
+    });
+    try {
+      // Only this wait is bounded: racing each handler would let the next event overtake it.
+      if (await Promise.race([running.then(() => false), expired]))
+        console.error(`Client bridge stopped while an event handler ran past ${stopMs}ms`);
+    } finally {
+      clearTimeout(timer);
+    }
+  };
   return {
     async start(hooks: LegacyEventSink): Promise<void> {
-      if (disposed) throw new BridgeError(409, "The client bridge is disposed");
+      if (stopping !== undefined) throw new BridgeError(409, "The client bridge is stopped");
       if (running !== undefined)
         throw new BridgeError(409, "The client bridge event subscription already started");
       const run = new AbortController();
       const signal = AbortSignal.any([controller.signal, run.signal]);
       const options = { signal };
       const ready = Promise.withResolvers<void>();
-      const stopped = (error: unknown): boolean =>
-        signal.aborted &&
-        (error === signal.reason || (error instanceof Error && error.name === ErrorName.Abort));
+      const stopped = (error: unknown): boolean => abortedBy(signal, error);
       const emit = async (event: LegacyEvent): Promise<void> => {
+        // Once stopped, no handler starts: the rest of a batch, a resync or the seed unwinds here.
+        signal.throwIfAborted();
         try {
           await hooks.event?.({ event });
         } catch (error) {
@@ -200,10 +232,13 @@ export function clientEvents(context: Plugin.Context, retries: SessionRetries): 
             const settling = group.some((event) => settles.has(event.type));
             if (settling) retries.clear(sessionID);
             try {
-              const [session, records] = await Promise.all([
-                context.session.get({ sessionID }, options),
-                context.session.context({ sessionID }, options),
-              ]);
+              const [session, records] = await raceAbort(
+                signal,
+                Promise.all([
+                  context.session.get({ sessionID }, options),
+                  context.session.context({ sessionID }, options),
+                ]),
+              );
               sessions.set(sessionID, session);
               snapshots.set(sessionID, { session, records, diffed: false });
             } catch (error) {
@@ -324,7 +359,10 @@ export function clientEvents(context: Plugin.Context, retries: SessionRetries): 
                 if (retries.clear(sessionID)) await now(status(sessionID, SessionStatusKind.Busy));
                 break;
               case SessionEventType.ToolSuccess: {
-                const todos = await recordTodos(context, sessionID, event.data, records, options);
+                const todos = await raceAbort(
+                  signal,
+                  recordTodos(context, sessionID, event.data, records, options),
+                );
                 if (todos !== undefined)
                   await now({
                     type: LegacyEventType.TodoUpdated,
@@ -373,7 +411,10 @@ export function clientEvents(context: Plugin.Context, retries: SessionRetries): 
         const finished = !isBusy(session) && idle !== undefined && idle !== settled.get(session.id);
         if (!isBusy(session)) retries.clear(session.id);
         if (!finished && JSON.stringify(known) === JSON.stringify(session)) return;
-        const records = await context.session.context({ sessionID: session.id }, options);
+        const records = await raceAbort(
+          signal,
+          context.session.context({ sessionID: session.id }, options),
+        );
         sessions.set(session.id, session);
         const info = legacySession(session);
         if (known === undefined)
@@ -391,9 +432,9 @@ export function clientEvents(context: Plugin.Context, retries: SessionRetries): 
       };
 
       const reconcile = async (announce: boolean): Promise<void> => {
-        const listed = await listSessions(
-          context,
-          new Request("http://omsago.invalid/session", { signal }),
+        const listed = await raceAbort(
+          signal,
+          listSessions(context, new Request("http://omsago.invalid/session", { signal })),
         );
         if (!announce) {
           for (const session of listed) {
@@ -405,7 +446,10 @@ export function clientEvents(context: Plugin.Context, retries: SessionRetries): 
         const fresh = new Map(listed.map((session) => [session.id, session]));
         for (const sessionID of [...sessions.keys()].filter((id) => !fresh.has(id))) {
           try {
-            fresh.set(sessionID, await context.session.get({ sessionID }, options));
+            fresh.set(
+              sessionID,
+              await raceAbort(signal, context.session.get({ sessionID }, options)),
+            );
           } catch (error) {
             if (!(error instanceof Error && error.name === ErrorName.SessionNotFound)) throw error;
             await deleted(sessionID);
@@ -515,6 +559,11 @@ export function clientEvents(context: Plugin.Context, retries: SessionRetries): 
       const pumping = guard(pump());
       enqueue(seed);
       running = Promise.all([pumping, guard(work())]).then(() => undefined);
+      const deadline = setTimeout(() => {
+        run.abort(
+          new BridgeError(504, `The client bridge did not load sessions within ${startMs}ms`),
+        );
+      }, startMs);
       try {
         await ready.promise;
       } catch (error) {
@@ -522,12 +571,13 @@ export function clientEvents(context: Plugin.Context, retries: SessionRetries): 
         await running;
         running = undefined;
         throw error;
+      } finally {
+        clearTimeout(deadline);
       }
     },
-    async dispose(): Promise<void> {
-      disposed = true;
-      controller.abort();
-      await running;
+    stop(): Promise<void> {
+      stopping ??= halt();
+      return stopping;
     },
   };
 }
