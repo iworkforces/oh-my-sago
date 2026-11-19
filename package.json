@@ -1,6 +1,6 @@
 {
   "name": "omsago",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "It codes like a SWEE would, another lobster way 🦞",
   "keywords": [
     "coding-agent",
@@ -53,7 +53,7 @@
   "dependencies": {
     "@opencode-ai/sdk": "1.19.6",
     "@opencode/plugin": "2.3.2",
-    "oh-my-openagent": "5.1.77",
+    "oh-my-openagent": "5.1.78",
     "zod": "4.6.7"
   },
   "devDependencies": {
@@ -73,7 +73,7 @@
     "typescript": "7.0.2"
   },
   "peerDependencies": {
-    "effect": "4.1.0"
+    "effect": "4.1.4"
   },
   "packageManager": "bun@1.4.4"
 }
