@@ -10,10 +10,12 @@ import type {
 } from "@opencode/client";
 import type { SessionModelResolve, SessionRequest } from "@opencode/plugin/promise/session";
 import type {
+  AgentConfig,
   AssistantMessage,
   BadRequestError,
   Config,
   Event,
+  NotFoundError,
   Part,
   SessionStatus,
   ToolPart,
@@ -152,6 +154,13 @@ export const McpServerType = {
 } as const satisfies Record<string, McpServerTypeValue>;
 export type McpServerType = (typeof McpServerType)[keyof typeof McpServerType];
 
+export const AgentMode = {
+  Subagent: "subagent",
+  Primary: "primary",
+  All: "all",
+} as const satisfies Record<string, NonNullable<AgentConfig["mode"]>>;
+export type AgentMode = (typeof AgentMode)[keyof typeof AgentMode];
+
 export const PermissionEffect = {
   Allow: "allow",
   Deny: "deny",
@@ -209,6 +218,7 @@ export const SessionEventType = {
   ToolSuccess: "session.tool.success",
   ToolFailed: "session.tool.failed",
   RetryScheduled: "session.retry.scheduled",
+  CompactionStarted: "session.compaction.started",
   CompactionEnded: "session.compaction.ended",
   CompactionFailed: "session.compaction.failed",
 } as const satisfies Record<string, Exclude<OpenCodeEvent["type"], "server.connected">>;
@@ -307,6 +317,7 @@ export const ErrorName = {
   Aborted: "MessageAbortedError",
   Api: "APIError",
   BadRequest: "BadRequest",
+  NotFound: "NotFoundError",
   Abort: "AbortError",
   Bridge: "BridgeError",
   Compatibility: "CompatibilityError",
@@ -316,6 +327,7 @@ export const ErrorName = {
   string,
   | NonNullable<AssistantMessage["error"]>["name"]
   | BadRequestError["name"]
+  | NotFoundError["name"]
   | "AbortError"
   | "BridgeError"
   | "CompatibilityError"

@@ -17,8 +17,7 @@ export async function registerDomains(
   scope.defer((await registerAgents(context, config)).dispose);
   scope.defer((await registerCommands(context, hooks, config)).dispose);
   scope.defer((await registerMcp(context, config)).dispose);
-  for (const dispose of await registerTools(context, hooks, await prepareTools(context, hooks)))
-    scope.defer(dispose);
+  scope.defer(await registerTools(context, hooks, await prepareTools(context, hooks)));
   scope.defer(
     (
       await context.shell.hook("create.before", async (event) => {

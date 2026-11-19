@@ -62,6 +62,24 @@ assert.ok(
   ),
 );
 
+// Broken legacy overrides of native agents remove them instead of keeping their looser rules.
+const agentIds = new Set(inventory.map((item) => item.id));
+assert.ok(agentIds.has("bridge-seeded-control"), JSON.stringify(inventory));
+for (const id of ["bridge-seeded-steps", "bridge-seeded-permission", "bridge-seeded-disabled"])
+  assert.equal(agentIds.has(id), false, `${id} must be removed`);
+
+// Malformed MCP entries are skipped, but a malformed toggle with enabled: false still disables.
+const servers = z
+  .object({
+    data: z.array(z.object({ name: z.string(), status: z.object({ status: z.string() }) })),
+  })
+  .parse(await host.request("/api/mcp")).data;
+const serverStatus = Object.fromEntries(servers.map((item) => [item.name, item.status.status]));
+assert.equal(serverStatus["bridge-valid"], "disabled", JSON.stringify(servers));
+assert.equal(serverStatus["bridge-configured"], "disabled", JSON.stringify(servers));
+for (const name of ["bridge-extra-key", "bridge-unsupported", "bridge-no-definition"])
+  assert.equal(serverStatus[name], undefined, JSON.stringify(servers));
+
 async function session(effect: PermissionEffect) {
   return sessionInfo.parse(
     await host.request("/api/session", {
@@ -95,6 +113,25 @@ assert.ok(
     (part) => part.type === PartKind.Tool && part.state?.status === ToolStateStatus.Error,
   ),
 );
+
+const listing = await session(PermissionEffect.Allow);
+await host.request(`/api/session/${listing.id}/prompt`, { text: "List the tools." });
+await host.request(`/api/session/${listing.id}/command`, { name: "fixture-wait", text: "" });
+const listed = z
+  .object({
+    data: z.array(
+      z.object({ content: z.array(z.object({ text: z.string().optional() })).optional() }),
+    ),
+  })
+  .parse(await host.request(`/api/session/${listing.id}/context`))
+  .data.flatMap((record) => record.content ?? [])
+  .flatMap((part) => (part.text?.startsWith("TOOLS ") === true ? [part.text.slice(6)] : []))[0];
+assert.ok(listed !== undefined, "The scripted provider did not report its tools");
+const toolDescriptions = z.record(z.string(), z.string()).parse(JSON.parse(listed));
+assert.ok("bridge_echo" in toolDescriptions, listed);
+assert.equal("bridge_unrepresentable" in toolDescriptions, false, listed);
+assert.ok("question" in toolDescriptions, listed);
+assert.notEqual(toolDescriptions["question"], "reshaped before the hook failed");
 
 const subscription = new AbortController();
 const opencode = OpenCode.make({ baseUrl: host.url, fetch: host.locationFetch });
@@ -164,6 +201,9 @@ console.log(
     tools: "passed",
     permissions: "passed",
     commands: "passed",
+    isolatedAgents: "passed",
+    isolatedMcp: "passed",
+    isolatedTools: "passed",
     cleanup: "passed",
     runtime: host.runtime,
   }),

@@ -1,10 +1,26 @@
 import type { Hooks } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
-import { Plugin } from "@opencode/plugin";
+import type { Config } from "@opencode-ai/sdk";
+import { Mcp, Plugin } from "@opencode/plugin";
 import { z } from "zod";
 import { registerDomains } from "../../../src/domains/index.js";
-import { ContentKind, MessageRole, PartKind, PermissionEffect } from "../../../src/enums.js";
-import { answer, scriptedProvider } from "../scripted-provider.js";
+import {
+  ContentKind,
+  MessageRole,
+  McpServerType,
+  PartKind,
+  PermissionEffect,
+} from "../../../src/enums.js";
+import { answer, scriptedProvider, type Script } from "../scripted-provider.js";
+
+// A native agent definition that a broken legacy override must not leave behind or loosen.
+const seededAgents = {
+  control: "bridge-seeded-control",
+  steps: "bridge-seeded-steps",
+  permission: "bridge-seeded-permission",
+  disabled: "bridge-seeded-disabled",
+} as const;
+const configuredServer = "bridge-configured";
 
 const hooks: Hooks = {
   tool: {
@@ -22,6 +38,19 @@ const hooks: Hooks = {
         return { title: "echo result", output: input.message, metadata: { owner: "legacy" } };
       },
     }),
+    bridge_unrepresentable: tool({
+      description: "Accept a Date, which JSON Schema cannot represent.",
+      args: { when: tool.schema.date() },
+      async execute() {
+        return "unreachable";
+      },
+    }),
+  },
+  async "tool.definition"(event, output) {
+    if (event.toolID === "question") {
+      output.description = "reshaped before the hook failed";
+      throw new Error("fixture definition hook failure");
+    }
   },
   async "tool.execute.before"(event, output) {
     if (event.tool === "bridge_echo") {
@@ -37,18 +66,29 @@ const hooks: Hooks = {
   },
 };
 
+function asked(request: Parameters<Script>[0], text: string): boolean {
+  return request.prompt.some(
+    (message) =>
+      message.role === MessageRole.User &&
+      message.content.some((part) => part.type === ContentKind.Text && part.text.includes(text)),
+  );
+}
+
 let calls = 0;
 const provider = scriptedProvider(async (request) => {
   if (request.prompt.some((message) => message.role === MessageRole.Tool)) return answer("done");
-  if (
-    request.prompt.some(
-      (message) =>
-        message.role === MessageRole.User &&
-        message.content.some(
-          (part) => part.type === ContentKind.Text && part.text.includes("Ask a question."),
+  if (asked(request, "List the tools."))
+    return answer(
+      `TOOLS ${JSON.stringify(
+        Object.fromEntries(
+          (request.tools ?? []).map((item) => [
+            item.name,
+            item.type === "function" ? (item.description ?? "") : "",
+          ]),
         ),
-    )
-  )
+      )}`,
+    );
+  if (asked(request, "Ask a question."))
     return {
       ...answer(""),
       content: [
@@ -91,16 +131,61 @@ export default Plugin.define({
     await using scope = new AsyncDisposableStack();
     const providerCleanup = await provider.setup(context);
     if (providerCleanup) scope.defer(providerCleanup);
-    const dispose = await registerDomains(context, hooks, {
+    scope.defer(
+      (
+        await context.agent.transform((editor) => {
+          for (const id of Object.values(seededAgents))
+            editor.update(id, (agent) => {
+              agent.mode = "subagent";
+              agent.system = "seeded";
+              agent.permissions.push({
+                action: "*",
+                resource: "*",
+                effect: PermissionEffect.Allow,
+              });
+            });
+        })
+      ).dispose,
+    );
+    scope.defer(
+      (
+        await context.mcp.transform((editor) => {
+          editor.set(
+            configuredServer,
+            new Mcp.LocalConfig({ type: McpServerType.Local, command: ["false"] }),
+          );
+        })
+      ).dispose,
+    );
+    // The SDK types cannot express malformed legacy entries, so the config skips type checking.
+    const config = z.custom<Config>().parse({
       agent: {
         "bridge-fixture": {
           prompt: "Fixture instructions",
           model: "omsago-test/scripted",
           permission: { edit: PermissionEffect.Deny },
         },
+        [seededAgents.steps]: { prompt: "Broken steps", steps: 0 },
+        [seededAgents.permission]: {
+          prompt: "Broken permission",
+          permission: { edit: "sometimes" },
+        },
+        [seededAgents.disabled]: {
+          disable: true,
+          steps: 0,
+          permission: { edit: "sometimes" },
+        },
       },
       command: { "bridge-command": { template: "Argument: $ARGUMENTS" } },
+      mcp: {
+        "bridge-valid": { type: McpServerType.Local, command: ["false"], enabled: false },
+        [configuredServer]: { enabled: false, unexpected: true },
+        "bridge-extra-key": { enabled: true, unexpected: true },
+        "bridge-unsupported": { type: "sse", url: "https://example.invalid/sse" },
+        "bridge-no-definition": { enabled: true },
+      },
     });
+    const dispose = await registerDomains(context, hooks, config);
     scope.defer(dispose);
     scope.defer(
       (
