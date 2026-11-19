@@ -6,12 +6,12 @@ import {
   MessageRole,
   PartKind,
   PermissionEffect,
-  RecordType,
   SessionEventType,
   SessionOperation,
   SessionOutcome,
 } from "../enums.js";
 import { body, promptBody, summarizeBody } from "./requests.js";
+import { abortedBy } from "./signal.js";
 import { clientMetadata, promptOverrides } from "./state.js";
 import { nativeAction } from "../domains/permissions.js";
 import { metadata } from "../domains/value.js";
@@ -32,6 +32,7 @@ export function promptRoutes(context: Plugin.Context) {
       const signal = AbortSignal.any([request.signal, controller.signal]);
       const subscription = context.event.subscribe({
         types: [
+          SessionEventType.CompactionStarted,
           SessionEventType.CompactionEnded,
           SessionEventType.CompactionFailed,
           SessionEventType.ExecutionInterrupted,
@@ -47,15 +48,13 @@ export function promptRoutes(context: Plugin.Context) {
         try {
           await pending;
         } catch (error) {
-          if (
-            error !== signal.reason &&
-            !(error instanceof Error && error.name === ErrorName.Abort)
-          )
-            throw error;
+          if (!abortedBy(signal, error)) throw error;
         }
         await events.return?.();
       });
       const admitted = await context.session.compact({ sessionID }, options);
+      // `ended` carries no input id, so it answers this request only after our `started`.
+      let ours = false;
       for (;;) {
         const next = await pending;
         if (next.done === true)
@@ -63,22 +62,19 @@ export function promptRoutes(context: Plugin.Context) {
         const event = next.value;
         if (event.data.sessionID === sessionID) {
           switch (event.type) {
+            case SessionEventType.CompactionStarted:
+              ours = event.data.inputID === admitted.id;
+              break;
             case SessionEventType.CompactionFailed:
               if (event.data.inputID === admitted.id)
                 throw new BridgeError(500, event.data.error.message);
               break;
-            case SessionEventType.CompactionEnded: {
-              const records = await context.session.context({ sessionID }, options);
-              if (
-                records.some(
-                  (record) => record.id === admitted.id && record.type === RecordType.Compaction,
-                )
-              ) {
+            case SessionEventType.CompactionEnded:
+              if (ours) {
                 await context.session.wait({ sessionID }, options);
                 return Response.json(true);
               }
               break;
-            }
             case SessionEventType.ExecutionInterrupted:
               throw new BridgeError(409, "Session compaction was interrupted");
             case SessionEventType.Deleted:
