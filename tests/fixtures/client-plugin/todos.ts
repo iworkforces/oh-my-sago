@@ -55,6 +55,10 @@ export async function verifyTodos(context: Plugin.Context, bridge: Bridge): Prom
   assert.deepEqual(await readTodos(bridge, id), expectedTodos);
   const metadata = (await context.session.get({ sessionID: id })).metadata;
   assert.equal(metadata?.["omsago.fixture.kept"], true, JSON.stringify(metadata));
+  // A child copies its parent's metadata natively, but starts without the parent's list.
+  const child = await client.session.create({ body: { parentID: id, title: "client todo child" } });
+  assert.ok(child.data, JSON.stringify(child.error));
+  assert.deepEqual(await readTodos(bridge, child.data.id), []);
 
   const compaction = log.mark();
   const compacted = await client.session.summarize({

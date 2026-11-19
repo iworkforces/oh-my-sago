@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import type { Plugin } from "@opencode/plugin";
 import { z } from "zod";
+import { BridgeError } from "../../../src/client/errors.js";
 import { clientEvents } from "../../../src/client/events.js";
-import type { createClientBridge } from "../../../src/client/index.js";
+import { createClientBridge } from "../../../src/client/index.js";
 import { SessionRetries } from "../../../src/client/sessions.js";
 import {
   ContentKind,
@@ -21,6 +22,8 @@ const sessionData = z.object({ sessionID: z.string() });
 /** A native event stream the fixture can end, fail or hold down, counting what it delivers. */
 class FlakyStream {
   down = false;
+  /** Relayed subscriptions their consumer has not closed yet. */
+  active = 0;
   readonly delivered = new Map<string, number>();
   readonly #pulled = new Map<string, PromiseWithResolvers<void>>();
   #cut: PromiseWithResolvers<Outcome> | undefined;
@@ -61,6 +64,7 @@ class FlakyStream {
     const cut = Promise.withResolvers<Outcome>();
     this.#cut = cut;
     const iterator = open()[Symbol.asyncIterator]();
+    this.active++;
     try {
       const first = iterator.next();
       this.#reopened.resolve();
@@ -75,17 +79,23 @@ class FlakyStream {
         next = await Promise.race([iterator.next(), cut.promise]);
       }
     } finally {
+      this.active--;
       await iterator.return?.();
     }
   }
 }
 
+interface Held {
+  sessionID?: string;
+  /** Settles once the sink starts stalling on the held session's busy status. */
+  readonly entered: PromiseWithResolvers<void>;
+  readonly release: PromiseWithResolvers<void>;
+}
+
 /** An event log whose sink stalls on the held session's busy status until released. */
-function holdingLog(): {
-  readonly log: EventLog;
-  readonly held: { sessionID?: string; readonly release: PromiseWithResolvers<void> };
-} {
-  const held: { sessionID?: string; readonly release: PromiseWithResolvers<void> } = {
+function holdingLog(): { readonly log: EventLog; readonly held: Held } {
+  const held: Held = {
+    entered: Promise.withResolvers<void>(),
     release: Promise.withResolvers<void>(),
   };
   const log = new EventLog(async (event) => {
@@ -93,10 +103,28 @@ function holdingLog(): {
       event.type === LegacyEventType.SessionStatus &&
       event.properties.sessionID === held.sessionID &&
       event.properties.status.type === SessionStatusKind.Busy
-    )
+    ) {
+      held.entered.resolve();
       await held.release.promise;
+    }
   });
   return { log, held };
+}
+
+/** Runs `action` and returns the first argument of every `console.error` call made meanwhile. */
+async function errorsDuring(action: () => Promise<void>): Promise<unknown[]> {
+  const logged: unknown[] = [];
+  const original = console.error;
+  console.error = (...data: unknown[]) => {
+    logged.push(data[0]);
+    original(...data);
+  };
+  try {
+    await action();
+  } finally {
+    console.error = original;
+  }
+  return logged;
 }
 
 async function createSession(bridge: Bridge, title: string): Promise<string> {
@@ -132,7 +160,7 @@ export async function verifyTodoFailure(
   const { log, held } = holdingLog();
   const events = clientEvents(failing, new SessionRetries());
   await using cleanup = new AsyncDisposableStack();
-  cleanup.defer(() => events.dispose());
+  cleanup.defer(() => events.stop());
   await events.start(log.sink);
   const id = await createSession(bridge, "stability todo failure");
   await log.until(
@@ -176,7 +204,7 @@ export async function verifyStability(
   const { log, held } = holdingLog();
   const events = clientEvents(flaky, new SessionRetries());
   await using cleanup = new AsyncDisposableStack();
-  cleanup.defer(() => events.dispose());
+  cleanup.defer(() => events.stop());
 
   await assert.rejects(events.start(log.sink), /fixture seed failure/);
   await events.start(log.sink);
@@ -266,4 +294,119 @@ export async function verifyStability(
   assert.ok(delivered >= 4, `only ${delivered} native events reached the bridge`);
   assert.ok(fetched <= 2, `${fetched} snapshot fetches for ${delivered} native events`);
   return { startup: "passed", recovery: "passed", coalescing: "passed" };
+}
+
+const bridgeError =
+  (status: number) =>
+  (error: unknown): boolean =>
+    error instanceof BridgeError && error.status === status;
+
+/** Stopping is bounded and final even while a handler or the seed listing never settles. */
+export async function verifyStop(
+  context: Plugin.Context,
+  bridge: Bridge,
+): Promise<
+  Readonly<
+    Record<"stalledHandler" | "stalledSeed" | "stoppedDelivery" | "closedTransport", "passed">
+  >
+> {
+  await using cleanup = new AsyncDisposableStack();
+
+  const stall = Promise.withResolvers<void>();
+  cleanup.defer(() => {
+    stall.resolve();
+  });
+  const entered = Promise.withResolvers<void>();
+  let handled = 0;
+  const stalled = clientEvents(context, new SessionRetries(), { stopMs: 50 });
+  cleanup.defer(() => stalled.stop());
+  await stalled.start({
+    async event() {
+      handled++;
+      entered.resolve();
+      await stall.promise;
+    },
+  });
+  await createSession(bridge, "stop with a stalled handler");
+  await entered.promise;
+  const logged = await errorsDuring(() => stalled.stop());
+  assert.equal(handled, 1);
+  assert.equal(
+    logged.filter(
+      (message) => typeof message === "string" && message.startsWith("Client bridge stopped"),
+    ).length,
+    1,
+    JSON.stringify(logged),
+  );
+
+  const listing = Promise.withResolvers<void>();
+  cleanup.defer(() => {
+    listing.resolve();
+  });
+  let listed: AbortSignal | undefined;
+  const seedStream = new FlakyStream(context);
+  const unlisted: Plugin.Context = {
+    ...context,
+    event: { subscribe: seedStream.subscribe },
+    session: {
+      ...context.session,
+      async list(input, options) {
+        listed = options?.signal;
+        await listing.promise;
+        return await context.session.list(input, options);
+      },
+    },
+  };
+  const seedless = clientEvents(unlisted, new SessionRetries(), { startMs: 50 });
+  cleanup.defer(() => seedless.stop());
+  await assert.rejects(seedless.start(new EventLog().sink), bridgeError(504));
+  assert.equal(listed?.aborted, true);
+  assert.equal(seedStream.active, 0);
+
+  const stream = new FlakyStream(context);
+  const flaky: Plugin.Context = { ...context, event: { subscribe: stream.subscribe } };
+  const { log, held } = holdingLog();
+  const delivering = clientEvents(flaky, new SessionRetries(), { stopMs: 60_000 });
+  cleanup.defer(() => delivering.stop());
+  cleanup.defer(() => {
+    held.release.resolve();
+  });
+  await delivering.start(log.sink);
+  const id = await createSession(bridge, "stop during delivery");
+  await log.until(
+    (event) => event.type === LegacyEventType.SessionCreated && event.properties.info.id === id,
+    "the stopped session's creation",
+  );
+  held.sessionID = id;
+  const queued = stream.pulled(id, SessionEventType.ExecutionSucceeded);
+  await promptSession(bridge, id, "CLIENT_STABILITY");
+  await held.entered.promise;
+  await queued;
+  const mark = log.mark();
+  const stopping = delivering.stop();
+  held.release.resolve();
+  await stopping;
+  assert.deepEqual(
+    log.since(mark).map((event) => event.type),
+    [],
+  );
+
+  const closing = createClientBridge(context, { emit: () => Promise.resolve() });
+  cleanup.defer(() => closing.close());
+  await closing.start(new EventLog().sink);
+  await closing.stop();
+  const sessions = await closing.input.client.session.list();
+  assert.ok(sessions.data, JSON.stringify(sessions.error));
+  await closing.close();
+  await closing.close();
+  await assert.rejects(closing.input.client.session.list(), bridgeError(503));
+  const unstarted = createClientBridge(context, { emit: () => Promise.resolve() });
+  await unstarted.close();
+  await assert.rejects(unstarted.start(new EventLog().sink), bridgeError(409));
+  return {
+    stalledHandler: "passed",
+    stalledSeed: "passed",
+    stoppedDelivery: "passed",
+    closedTransport: "passed",
+  };
 }

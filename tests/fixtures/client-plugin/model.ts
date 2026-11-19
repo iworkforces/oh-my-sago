@@ -17,7 +17,8 @@ export interface VariantRequest {
 
 export interface ClientModel {
   readonly script: Script;
-  readonly started: Promise<void>;
+  /** Settles once the next `CLIENT_CANCEL` request is blocked waiting for its abort signal. */
+  blocked(): Promise<void>;
   readonly variants: readonly VariantRequest[];
 }
 
@@ -37,7 +38,7 @@ function toolCall(name: string, input: unknown): Awaited<ReturnType<Script>> {
 }
 
 export function clientModel(): ClientModel {
-  const started = Promise.withResolvers<void>();
+  const waiting: PromiseWithResolvers<void>[] = [];
   const variants: VariantRequest[] = [];
   let retries = 0;
   const script: Script = async (request) => {
@@ -84,7 +85,7 @@ export function clientModel(): ClientModel {
       const signal = request.abortSignal;
       signal?.throwIfAborted();
       const blocked = aborted(signal);
-      started.resolve();
+      for (const waiter of waiting.splice(0)) waiter.resolve();
       await blocked;
     }
     if (text.includes("CLIENT_READ")) {
@@ -109,7 +110,15 @@ export function clientModel(): ClientModel {
     }
     return answer("client boundary reply");
   };
-  return { script, started: started.promise, variants };
+  return {
+    script,
+    blocked() {
+      const waiter = Promise.withResolvers<void>();
+      waiting.push(waiter);
+      return waiter.promise;
+    },
+    variants,
+  };
 }
 
 class ScriptFailure extends APICallError {

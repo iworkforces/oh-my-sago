@@ -1,8 +1,14 @@
 import assert from "node:assert/strict";
 import type { Plugin } from "@opencode/plugin";
 import type { SessionInfo } from "@opencode/client";
-import { SessionStatusKind, ToastVariant } from "../../../src/enums.js";
+import { z } from "zod";
+import { ErrorName, SessionStatusKind, ToastVariant } from "../../../src/enums.js";
 import { createClientBridge } from "../../../src/client/index.js";
+
+const notFoundBody = z.strictObject({
+  name: z.literal(ErrorName.NotFound),
+  data: z.strictObject({ message: z.string() }),
+});
 
 export const fixtureToast = {
   title: "fixture title",
@@ -15,7 +21,9 @@ export async function verifyClient(fixture: {
   readonly context: Plugin.Context;
   readonly bridge: ReturnType<typeof createClientBridge>;
   readonly session: SessionInfo;
-}): Promise<Readonly<Record<"discovery" | "sessions" | "pagination" | "toasts", "passed">>> {
+}): Promise<
+  Readonly<Record<"discovery" | "sessions" | "notFound" | "pagination" | "toasts", "passed">>
+> {
   const directory = fixture.context.location.directory;
   {
     const { input } = fixture.bridge;
@@ -84,6 +92,15 @@ export async function verifyClient(fixture: {
       (await fixture.context.session.list({ directory })).data.some((session) => session.id === id),
       false,
     );
+    const missing = await Promise.all([
+      client.session.get({ path: { id } }),
+      client.session.update({ path: { id }, body: { title: "gone" } }),
+      client.session.delete({ path: { id } }),
+    ]);
+    for (const { response, error } of missing) {
+      assert.equal(response.status, 404, JSON.stringify(error));
+      notFoundBody.parse(error);
+    }
   }
   {
     const calls: Array<{ cursor: string | undefined; signal: AbortSignal | undefined }> = [];
@@ -121,7 +138,7 @@ export async function verifyClient(fixture: {
       controller.abort();
       assert.ok(calls.every((call) => call.signal?.aborted === true));
     } finally {
-      await bridge.dispose();
+      await bridge.close();
     }
   }
   {
@@ -136,6 +153,7 @@ export async function verifyClient(fixture: {
   return {
     discovery: "passed",
     sessions: "passed",
+    notFound: "passed",
     pagination: "passed",
     toasts: "passed",
   } as const;

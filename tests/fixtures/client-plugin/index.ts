@@ -5,7 +5,8 @@ import { toastRpc } from "../../../src/toast.js";
 import { scriptedProvider } from "../scripted-provider.js";
 import { verifyClient } from "./contracts.js";
 import { clientModel, clientVariants } from "./model.js";
-import { verifyStability, verifyTodoFailure } from "./stability.js";
+import { verifyStability, verifyStop, verifyTodoFailure } from "./stability.js";
+import { systemPrefix, systemProbe } from "./system.js";
 import { verifyRestoredTodos, verifyTodos } from "./todos.js";
 import { verifyTurns } from "./turns.js";
 import { registerSessions } from "../../../src/session/index.js";
@@ -22,7 +23,7 @@ export default Plugin.define({
     const toasts = await context.rpc.register(toastRpc, {});
     scope.defer(toasts.dispose);
     const bridge = createClientBridge(context, toasts.events);
-    scope.defer(bridge.dispose);
+    scope.defer(bridge.close);
     scope.defer(
       (
         await context.session.hook("retry", (event) => {
@@ -33,6 +34,8 @@ export default Plugin.define({
     const report = (sessionID: string, result: Record<string, string>) =>
       context.session.update({ sessionID, metadata: { "omsago.fixture": result } });
     await Bun.write(`${context.location.directory}/client.txt`, "client fixture content");
+    const probe = systemProbe(context);
+    scope.defer((await probe.tag()).dispose);
     scope.defer(
       await registerSessions(
         context,
@@ -46,6 +49,7 @@ export default Plugin.define({
             }
           },
           async "experimental.chat.system.transform"(_input, output) {
+            output.system.unshift(systemPrefix);
             output.system.push("system hook");
           },
           async "experimental.chat.messages.transform"(_input, output) {
@@ -63,6 +67,7 @@ export default Plugin.define({
         bridge.sessionState,
       ),
     );
+    scope.defer((await probe.check()).dispose);
     scope.defer(
       (
         await context.command.transform((editor) => {
@@ -73,7 +78,14 @@ export default Plugin.define({
               const result = await verifyClient({ context, bridge, session });
               const turns = await verifyTurns(context, bridge, model);
               const stability = await verifyStability(context, bridge);
-              await report(event.sessionID, { ...result, ...turns, ...stability });
+              const stop = await verifyStop(context, bridge);
+              await report(event.sessionID, {
+                ...result,
+                ...turns,
+                ...stability,
+                ...stop,
+                systemMetadata: probe.verify(),
+              });
             },
           });
           editor.add({

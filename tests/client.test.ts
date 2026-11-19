@@ -7,18 +7,26 @@ test("the legacy client preserves discovery envelopes, session lifecycle, pagina
   expect(JSON.parse(result.stdout)).toEqual({
     discovery: "passed",
     sessions: "passed",
+    notFound: "passed",
     pagination: "passed",
     turns: "passed",
     errors: "passed",
     cancellation: "passed",
+    promptAbort: "passed",
     events: "passed",
     compaction: "passed",
+    compactionCorrelation: "passed",
     toasts: "passed",
     retry: "passed",
     variants: "passed",
     startup: "passed",
     recovery: "passed",
     coalescing: "passed",
+    stalledHandler: "passed",
+    stalledSeed: "passed",
+    stoppedDelivery: "passed",
+    closedTransport: "passed",
+    systemMetadata: "passed",
   });
 }, 90_000);
 

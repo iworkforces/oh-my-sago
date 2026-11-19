@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
+import type { OpenCodeEvent } from "@opencode/client";
 import type { Plugin } from "@opencode/plugin";
 import type { LegacyEvent } from "../../../src/client/events.js";
-import type { createClientBridge } from "../../../src/client/index.js";
+import { createClientBridge } from "../../../src/client/index.js";
 import {
   CompactionStatus,
   ContentKind,
@@ -10,6 +11,7 @@ import {
   MessageRole,
   PartKind,
   RecordType,
+  SessionEventType,
   SessionOutcome,
   SessionStatusKind,
   ToolStateStatus,
@@ -21,10 +23,50 @@ type Scenario =
   | "turns"
   | "errors"
   | "cancellation"
+  | "promptAbort"
   | "events"
   | "compaction"
+  | "compactionCorrelation"
   | "retry"
   | "variants";
+
+/**
+ * Relays a subscription, slipping in a `session.compaction.ended` that no compaction of ours
+ * started, just ahead of the session's first compaction event.
+ */
+async function* withForeignEnd<Event extends OpenCodeEvent>(
+  events: AsyncIterable<Event>,
+  types: ReadonlyArray<string> | undefined,
+  sessionID: string,
+  injected: () => void,
+): AsyncGenerator<Event, void> {
+  const selected = (event: OpenCodeEvent): event is Event =>
+    types === undefined || types.includes(event.type);
+  let pending = true;
+  for await (const event of events) {
+    const native: OpenCodeEvent = event;
+    if (
+      pending &&
+      (native.type === SessionEventType.CompactionStarted ||
+        native.type === SessionEventType.CompactionFailed) &&
+      native.data.sessionID === sessionID
+    ) {
+      pending = false;
+      const foreign = {
+        id: native.id,
+        created: native.created,
+        durable: native.durable,
+        type: SessionEventType.CompactionEnded,
+        data: { sessionID: native.data.sessionID, reason: native.data.reason, text: "foreign" },
+      } satisfies OpenCodeEvent;
+      if (selected(foreign)) {
+        injected();
+        yield foreign;
+      }
+    }
+    yield event;
+  }
+}
 
 export function settledOrder(events: readonly LegacyEvent[]): string[] {
   const types = events.map((event) =>
@@ -152,6 +194,33 @@ export async function verifyTurns(
   assert.equal(rejected.response.status, 500);
   assert.match(JSON.stringify(rejected.error), /summary did not match the required template/);
 
+  const raced = await create();
+  assert.ok((await client.session.prompt({ path: { id: raced.id }, body: invalidPrompt })).data);
+  let foreignEnds = 0;
+  const racing = createClientBridge(
+    {
+      ...context,
+      event: {
+        subscribe: (options) =>
+          withForeignEnd(context.event.subscribe(options), options?.types, raced.id, () => {
+            foreignEnds++;
+          }),
+      },
+    },
+    { emit: () => Promise.resolve() },
+  );
+  try {
+    const correlated = await racing.input.client.session.summarize({
+      path: { id: raced.id },
+      body: { providerID: "omsago-test", modelID: "scripted" },
+    });
+    assert.equal(correlated.response.status, 500, JSON.stringify(correlated.data));
+    assert.match(JSON.stringify(correlated.error), /summary did not match the required template/);
+    assert.equal(foreignEnds, 1);
+  } finally {
+    await racing.close();
+  }
+
   const failed = await create();
   rejectErrorsOf.add(failed.id);
   const failure = log.mark();
@@ -177,12 +246,13 @@ export async function verifyTurns(
 
   const cancelled = await create();
   const interruption = log.mark();
+  const started = model.blocked();
   const queued = await client.session.promptAsync({
     path: { id: cancelled.id },
     body: { parts: [{ type: ContentKind.Text, text: "CLIENT_CANCEL" }] },
   });
   assert.equal(queued.response.status, 204);
-  await model.started;
+  await started;
   assert.equal((await client.session.abort({ path: { id: cancelled.id } })).data, true);
   await context.session.wait({ sessionID: cancelled.id });
   assert.equal(
@@ -200,6 +270,29 @@ export async function verifyTurns(
   await log.until(idleOf(cancelled.id), "idle after an interrupted turn", interruption);
   const interruptedOrder = settledOrder(log.since(interruption, cancelled.id));
   assert.ok(interruptedOrder.includes(LegacyEventType.SessionError));
+
+  const abandoned = await create();
+  const caller = new AbortController();
+  const blocked = model.blocked();
+  const waiting = client.session.prompt({
+    path: { id: abandoned.id },
+    body: { parts: [{ type: ContentKind.Text, text: "CLIENT_CANCEL" }] },
+    signal: caller.signal,
+  });
+  await blocked;
+  const reason = new Error("fixture caller gave up");
+  caller.abort(reason);
+  await assert.rejects(waiting, (error) => error === reason);
+  assert.deepEqual((await client.session.status()).data?.[abandoned.id], {
+    type: SessionStatusKind.Busy,
+  });
+  const stopping = log.mark();
+  assert.equal((await client.session.abort({ path: { id: abandoned.id } })).data, true);
+  await log.until(idleOf(abandoned.id), "idle after interrupting an abandoned prompt", stopping);
+  assert.equal(
+    (await context.session.get({ sessionID: abandoned.id })).outcome,
+    SessionOutcome.Interrupted,
+  );
 
   const retried = await create();
   const retry = log.mark();
@@ -273,8 +366,10 @@ export async function verifyTurns(
     turns: "passed",
     errors: "passed",
     cancellation: "passed",
+    promptAbort: "passed",
     events: "passed",
     compaction: "passed",
+    compactionCorrelation: "passed",
     retry: "passed",
     variants: "passed",
   } as const;
