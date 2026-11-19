@@ -18,8 +18,18 @@ export function assertNever(value: never): never {
 }
 
 export function errorResponse(error: Error): Response {
+  // The runtime names a missing session instead of giving it a status; legacy callers expect 404.
+  const status =
+    error instanceof BridgeError
+      ? error.status
+      : error.name === ErrorName.SessionNotFound
+        ? 404
+        : 500;
   return Response.json(
-    { name: ErrorName.BadRequest, data: { message: error.message } },
-    { status: error instanceof BridgeError ? error.status : 500 },
+    {
+      name: status === 404 ? ErrorName.NotFound : ErrorName.BadRequest,
+      data: { message: error.message },
+    },
+    { status },
   );
 }
