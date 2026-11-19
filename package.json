@@ -53,7 +53,7 @@
   "dependencies": {
     "@opencode-ai/sdk": "1.19.6",
     "@opencode/plugin": "2.3.2",
-    "oh-my-openagent": "5.1.78",
+    "oh-my-openagent": "5.1.79",
     "zod": "4.6.7"
   },
   "devDependencies": {
