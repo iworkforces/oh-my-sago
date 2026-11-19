@@ -12,6 +12,10 @@ export class CompatibilityError extends Error {
   }
 }
 
+export function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export const json = z.json();
 export type Json = z.infer<typeof json>;
 export const jsonRecord = z.record(z.string(), json);

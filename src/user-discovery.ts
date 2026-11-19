@@ -1,3 +1,4 @@
+import type { Stats } from "node:fs";
 import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative, sep } from "node:path";
@@ -5,6 +6,7 @@ import type { Config } from "@opencode-ai/sdk";
 import { Skill, type Plugin } from "@opencode/plugin";
 import type { Registration } from "@opencode/plugin/promise/registration";
 import { z } from "zod";
+import { errorMessage } from "./domains/value.js";
 
 const frontmatter = z.object({
   name: z.string().optional(),
@@ -14,6 +16,13 @@ const frontmatter = z.object({
   subtask: z.boolean().optional(),
   autoinvoke: z.boolean().optional(),
 });
+
+function skipUnreadable(path: string, error: unknown): void {
+  console.warn("omsago: Skipping unreadable path", {
+    path,
+    reason: errorMessage(error),
+  });
+}
 
 async function* markdownFiles(root: string) {
   const pending = [root];
@@ -31,13 +40,26 @@ async function* markdownFiles(root: string) {
         (error.code === "ENOENT" || error.code === "ENOTDIR" || error.code === "ELOOP")
       )
         continue;
-      throw error;
+      skipUnreadable(path, error);
+      continue;
     }
     if (visited.has(canonical)) continue;
     visited.add(canonical);
-    const entry = await stat(canonical);
+    let entry: Stats;
+    try {
+      entry = await stat(canonical);
+    } catch (error) {
+      skipUnreadable(path, error);
+      continue;
+    }
     if (entry.isDirectory()) {
-      const names = (await readdir(path)).sort().reverse();
+      let names: string[];
+      try {
+        names = (await readdir(path)).sort().reverse();
+      } catch (error) {
+        skipUnreadable(path, error);
+        continue;
+      }
       for (const name of names) {
         if (!name.startsWith(".") && name !== "node_modules") pending.push(join(path, name));
       }
@@ -48,7 +70,13 @@ async function* markdownFiles(root: string) {
 }
 
 async function markdown(file: { readonly path: string; readonly canonical: string }) {
-  const text = await readFile(file.canonical, "utf8");
+  let text: string;
+  try {
+    text = await readFile(file.canonical, "utf8");
+  } catch (error) {
+    skipUnreadable(file.path, error);
+    return undefined;
+  }
   const header = /^\uFEFF?---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(text);
   try {
     const yaml = header?.[1];

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, realpath, symlink } from "node:fs/promises";
+import { chmod, mkdir, realpath, symlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -67,6 +67,9 @@ async function markdown(path: string, text: string) {
   await mkdir(dirname(path), { recursive: true });
   await Bun.write(path, text);
 }
+// A root user can read files with mode 000, so the unreadable-entry checks only run unprivileged.
+const unprivileged = process.getuid?.() !== 0;
+await using restore = new AsyncDisposableStack();
 const homes = [".agents", ".opencode"];
 for (const [index, root] of homes.entries()) {
   await markdown(
@@ -92,6 +95,26 @@ await markdown(
   join(homedir(), ".opencode", "commands", "invalid-metadata.md"),
   "---\nmodel: false\n---\nInvalid command metadata.",
 );
+if (unprivileged) {
+  const unreadableCommand = join(homedir(), ".opencode", "commands", "unreadable-command.md");
+  const unreadableSkill = join(homedir(), ".opencode", "skills", "unreadable", "SKILL.md");
+  const lockedDirectory = join(homedir(), ".opencode", "skills", "locked");
+  await markdown(unreadableCommand, "Unreadable command.");
+  await markdown(
+    unreadableSkill,
+    "---\nname: discovery-unreadable\n---\nUnreadable skill instructions.",
+  );
+  await markdown(
+    join(lockedDirectory, "SKILL.md"),
+    "---\nname: discovery-locked\n---\nLocked skill instructions.",
+  );
+  for (const file of [unreadableCommand, unreadableSkill]) {
+    await chmod(file, 0o000);
+    restore.defer(() => chmod(file, 0o644));
+  }
+  await chmod(lockedDirectory, 0o000);
+  restore.defer(() => chmod(lockedDirectory, 0o755));
+}
 await markdown(join(homedir(), ".agents", "commands", "nested", "review.md"), "nested $ARGUMENTS");
 await markdown(
   join(homedir(), ".opencode", "skills", "collection", "deep", "nested", "SKILL.md"),
@@ -124,6 +147,7 @@ await using host = await cliHost(directory, sources);
 await host.request("/api/model");
 const inventory = commandsSchema.parse(await host.request("/api/command")).data;
 assert.ok(inventory.every((command) => command.name !== "invalid-metadata"));
+assert.ok(inventory.every((command) => command.name !== "unreadable-command"));
 console.error(
   JSON.stringify({
     commands: inventory.filter((command) =>
@@ -138,6 +162,11 @@ for (const name of ["from-0", "from-1", "nested/review", "explicit-wins", "proje
   );
 const skills = skillsSchema.parse(await host.request("/api/skill")).data;
 assert.ok(skills.every((skill) => skill.name !== "discovery-invalid-yaml"));
+assert.ok(
+  skills.every(
+    (skill) => skill.name !== "discovery-unreadable" && skill.name !== "discovery-locked",
+  ),
+);
 console.error(
   JSON.stringify({ skills: skills.filter((skill) => skill.name.startsWith("discovery-")) }),
 );
@@ -218,5 +247,6 @@ console.log(
     skills: "passed",
     skillLoading: "passed",
     precedence: "passed",
+    unreadable: unprivileged ? "passed" : "skipped",
   }),
 );

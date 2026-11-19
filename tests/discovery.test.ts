@@ -14,5 +14,6 @@ test("user-root commands and skills are native and retain existing definitions o
     skills: "passed",
     skillLoading: "passed",
     precedence: "passed",
+    unreadable: process.getuid?.() === 0 ? "skipped" : "passed",
   });
 }, 110_000);
