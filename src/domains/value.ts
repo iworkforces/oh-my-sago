@@ -41,8 +41,16 @@ const nativeNames: Readonly<Record<string, string>> = {
   run_shell: "bash",
 };
 
+const legacyNames: ReadonlyMap<string, string> = new Map(
+  Object.entries(nativeNames).map(([native, legacy]) => [legacy, native]),
+);
+
 export function legacyName(name: string): string {
   return nativeNames[name] ?? name;
+}
+
+export function nativeName(name: string): string {
+  return legacyNames.get(name) ?? name;
 }
 
 export function legacyArguments(name: string, input: unknown): unknown {
