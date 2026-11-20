@@ -1,7 +1,7 @@
 import { Model, type Plugin } from "@opencode/plugin";
 import type { SessionContext, SessionRequest } from "@opencode/plugin/promise/session";
 import type { Hooks } from "@opencode-ai/plugin";
-import type { ClientSessionState } from "../client/state.js";
+import type { ClientSessionState, Turn } from "../client/state.js";
 import { ContentKind, SessionRequestKind } from "../enums.js";
 import { offersVariant, requestContext } from "./model.js";
 import { transformMessages } from "./messages.js";
@@ -42,19 +42,8 @@ export async function registerSessions(
     event.system = system;
   };
   stack.defer(
-    (
-      await context.session.hook("prompt", async (event) => {
-        await transformPrompt(context, event, hooks);
-        state.admit(event.sessionID, event.messageID);
-      })
-    ).dispose,
-  );
-  stack.defer(
-    (
-      await context.session.hook("experimental.idle", (event) => {
-        state.settle(event.sessionID);
-      })
-    ).dispose,
+    (await context.session.hook("prompt", (event) => transformPrompt(context, event, hooks)))
+      .dispose,
   );
   stack.defer(
     (
@@ -78,8 +67,8 @@ export async function registerSessions(
       })
     ).dispose,
   );
-  const primary = async (event: SessionContext): Promise<void> => {
-    state.apply(event);
+  const primary = async (event: SessionContext, turn?: Turn): Promise<void> => {
+    state.apply(event, turn);
     await request(event);
     if (hooks["chat.params"] !== undefined) {
       const input = await requestContext(context, event);
@@ -101,8 +90,12 @@ export async function registerSessions(
       else options.maxTokens = output.maxOutputTokens;
     }
   };
-  stack.defer((await context.session.hook("context", primary)).dispose);
-  stack.defer((await context.session.hook("generate", primary)).dispose);
+  // Only a primary request's own `context` hook takes the turn its model resolution recorded.
+  stack.defer(
+    (await context.session.hook("context", (event) => primary(event, state.take(event.sessionID))))
+      .dispose,
+  );
+  stack.defer((await context.session.hook("generate", (event) => primary(event))).dispose);
   stack.defer((await context.session.hook("title", request)).dispose);
   stack.defer(
     (

@@ -33,7 +33,7 @@ export function createClientBridge(context: Plugin.Context, toasts: ToastEmitter
   const sessionState = new ClientSessionState();
   const retries = new SessionRetries();
   const sessions = sessionRoutes(context, sessionState, retries);
-  const events = clientEvents(context, retries);
+  const events = clientEvents(context, retries, sessionState);
   let closed = false;
   const showToast = async (request: Request): Promise<Response> => {
     const input = await body(request, toast);
@@ -106,10 +106,14 @@ export function createClientBridge(context: Plugin.Context, toasts: ToastEmitter
     input,
     sessionState,
     start: (hooks: LegacyEventSink) => events.start(hooks),
-    stop: () => events.stop(),
+    stop: async () => {
+      await events.stop();
+      retries.stop();
+    },
     close: async () => {
       closed = true;
       await events.stop();
+      retries.stop();
     },
   };
 }

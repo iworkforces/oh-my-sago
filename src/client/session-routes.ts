@@ -73,6 +73,7 @@ export function sessionRoutes(
         case "DELETE":
           await context.session.remove({ sessionID }, options);
           state.delete(sessionID);
+          retries.clear(sessionID);
           return Response.json(true);
       }
     }

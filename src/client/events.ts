@@ -9,6 +9,7 @@ import { BridgeError, assertNever } from "./errors.js";
 import { legacyError, legacyMessages } from "./messages.js";
 import { type SessionRetries, isBusy, legacySession, listSessions } from "./sessions.js";
 import { abortedBy, raceAbort } from "./signal.js";
+import type { ClientSessionState } from "./state.js";
 import { recordTodos } from "./todos.js";
 
 const types = [
@@ -99,6 +100,7 @@ export interface ClientEvents {
 export function clientEvents(
   context: Plugin.Context,
   retries: SessionRetries,
+  state: ClientSessionState,
   bounds: Partial<EventBounds> = {},
 ): ClientEvents {
   const { startMs, stopMs } = { ...defaultBounds, ...bounds };
@@ -117,6 +119,7 @@ export function clientEvents(
     settled.delete(sessionID);
     resynced.delete(sessionID);
     retries.clear(sessionID);
+    state.delete(sessionID);
   };
   const halt = async (): Promise<void> => {
     controller.abort();

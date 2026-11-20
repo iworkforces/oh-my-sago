@@ -36,50 +36,47 @@ function storedOverrides(metadata: Readonly<Record<string, unknown>> | undefined
   return stored === undefined ? undefined : promptOverrides.parse(stored);
 }
 
-type Turn = { readonly messageID: string; readonly overrides: PromptOverrides | undefined };
+/** The prompt overrides one primary request resolved; `undefined` when its user record had none. */
+export type Turn = { readonly overrides: PromptOverrides | undefined };
 
 /**
- * Tracks the user message that started each session's current turn, so prompt overrides and the
- * variant apply to that turn only. Parent session hooks apply it after their own legacy
- * transformations.
+ * Hands each primary request the prompt overrides stored on the latest user record that existed
+ * when its model was resolved. `experimental.model.resolve` records them and the same request's
+ * `context` hook takes them, so no turn outlives the request that read it. Parent session hooks
+ * apply them after their own legacy transformations.
  */
 export class ClientSessionState {
-  readonly #admitted = new Map<string, string[]>();
-  readonly #current = new Map<string, Turn>();
+  readonly #resolved = new Map<string, Turn>();
 
-  admit(sessionID: string, messageID: string): void {
-    this.#admitted.set(sessionID, [...(this.#admitted.get(sessionID) ?? []), messageID]);
-  }
   delete(sessionID: string): void {
-    this.#admitted.delete(sessionID);
-    this.#current.delete(sessionID);
-  }
-  settle(sessionID: string): void {
-    this.#current.delete(sessionID);
+    this.#resolved.delete(sessionID);
   }
 
-  /** Records are read only when no turn is cached or an admitted prompt may have started one. */
+  /** Reads the latest user record for a primary request and keeps its overrides for `take`. */
   async variant(
     sessionID: string,
     records: () => Promise<readonly SessionMessageInfo[]>,
   ): Promise<string | undefined> {
-    let turn = this.#current.get(sessionID);
-    if (turn === undefined || this.#admitted.has(sessionID)) {
-      const latest = (await records()).findLast((record) => record.type === RecordType.User);
-      if (latest !== undefined) {
-        const admitted = this.#admitted.get(sessionID) ?? [];
-        const pending = admitted.slice(admitted.indexOf(latest.id) + 1);
-        if (pending.length === 0) this.#admitted.delete(sessionID);
-        else this.#admitted.set(sessionID, pending);
-        turn = { messageID: latest.id, overrides: storedOverrides(latest.metadata) };
-        this.#current.set(sessionID, turn);
-      }
-    }
-    return turn?.overrides?.variant;
+    // A request whose resolution fails must not leave an earlier request's turn behind.
+    this.#resolved.delete(sessionID);
+    const latest = (await records()).findLast((record) => record.type === RecordType.User);
+    const turn = { overrides: storedOverrides(latest?.metadata) };
+    this.#resolved.set(sessionID, turn);
+    return turn.overrides?.variant;
   }
 
-  apply(event: SessionContext): void {
-    const turn = this.#current.get(event.sessionID);
+  /** Removes and returns the turn the session's latest primary resolution recorded. */
+  take(sessionID: string): Turn | undefined {
+    const turn = this.#resolved.get(sessionID);
+    this.#resolved.delete(sessionID);
+    return turn;
+  }
+
+  /**
+   * Applies `turn`, or without one the overrides on the request's latest user message, as for
+   * compaction and generate requests, which resolve no turn of their own.
+   */
+  apply(event: SessionContext, turn: Turn | undefined): void {
     const overrides =
       turn === undefined
         ? storedOverrides(

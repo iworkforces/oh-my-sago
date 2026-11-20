@@ -22,20 +22,28 @@ export function isBusy(session: SessionInfo): boolean {
 
 export type RetryStatus = Extract<SessionStatus, { type: typeof SessionStatusKind.Retry }>;
 
-/** Pending provider retries, shared by one bridge's event loop and its status route. */
+/**
+ * Pending provider retries, shared by one bridge's event loop and its status route. Only a busy
+ * session reports one, and none survive the bridge's event loop stopping.
+ */
 export class SessionRetries {
   readonly #pending = new Map<string, RetryStatus>();
+  #stopped = false;
 
   set(sessionID: string, status: RetryStatus): void {
-    this.#pending.set(sessionID, status);
+    if (!this.#stopped) this.#pending.set(sessionID, status);
   }
   clear(sessionID: string): boolean {
     return this.#pending.delete(sessionID);
   }
+  /** Drops every pending retry and ignores later ones, since no event will ever clear them. */
+  stop(): void {
+    this.#stopped = true;
+    this.#pending.clear();
+  }
   status(session: SessionInfo): SessionStatus {
-    const retry = this.#pending.get(session.id);
-    if (retry !== undefined) return retry;
-    return isBusy(session) ? { type: SessionStatusKind.Busy } : { type: SessionStatusKind.Idle };
+    if (!isBusy(session)) return { type: SessionStatusKind.Idle };
+    return this.#pending.get(session.id) ?? { type: SessionStatusKind.Busy };
   }
 }
 
