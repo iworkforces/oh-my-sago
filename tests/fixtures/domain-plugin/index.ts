@@ -21,6 +21,8 @@ const seededAgents = {
   disabled: "bridge-seeded-disabled",
 } as const;
 const configuredServer = "bridge-configured";
+/** Defined natively and by the legacy config; the native definition registers first and stays. */
+const nativeServer = "bridge-native";
 /** Probe modes whose permission request reached the legacy `permission.ask` hook. */
 const probed = new Set<string>();
 const probeArgs = z.object({ mode: z.string() });
@@ -228,6 +230,10 @@ export default Plugin.define({
             configuredServer,
             new Mcp.LocalConfig({ type: McpServerType.Local, command: ["false"] }),
           );
+          editor.set(
+            nativeServer,
+            new Mcp.LocalConfig({ type: McpServerType.Local, command: ["false"], disabled: true }),
+          );
         })
       ).dispose,
     );
@@ -276,6 +282,7 @@ export default Plugin.define({
       mcp: {
         "bridge-valid": { type: McpServerType.Local, command: ["false"], enabled: false },
         [configuredServer]: { enabled: false, unexpected: true },
+        [nativeServer]: { type: McpServerType.Local, command: ["false"], enabled: true },
         "bridge-extra-key": { enabled: true, unexpected: true },
         "bridge-unsupported": { type: "sse", url: "https://example.invalid/sse" },
         "bridge-no-definition": { enabled: true },
