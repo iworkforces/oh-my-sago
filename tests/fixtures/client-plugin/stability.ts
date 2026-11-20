@@ -11,6 +11,7 @@ import { sessionRoutes } from "../../../src/client/session-routes.js";
 import { ClientSessionState } from "../../../src/client/state.js";
 import {
   ContentKind,
+  ErrorName,
   LegacyEventType,
   MessageRole,
   SessionEventType,
@@ -486,6 +487,13 @@ export async function verifyStop(
 
   const closing = createClientBridge(context, { emit: () => Promise.resolve() });
   cleanup.defer(() => closing.close());
+  const loopback = new URL("/session", closing.input.serverUrl);
+  const unavailable = await fetch(loopback);
+  assert.equal(unavailable.status, 404);
+  assert.equal(
+    z.object({ name: z.string() }).parse(await unavailable.json()).name,
+    ErrorName.NotFound,
+  );
   await closing.start(new EventLog().sink);
   await closing.stop();
   const sessions = await closing.input.client.session.list();
@@ -493,6 +501,7 @@ export async function verifyStop(
   await closing.close();
   await closing.close();
   await assert.rejects(closing.input.client.session.list(), bridgeError(503));
+  await assert.rejects(fetch(loopback));
   const unstarted = createClientBridge(context, { emit: () => Promise.resolve() });
   await unstarted.close();
   await assert.rejects(unstarted.start(new EventLog().sink), bridgeError(409));

@@ -1,18 +1,18 @@
 import { ContentKind, MessageRole } from "../../../src/enums.js";
-import { answer, scriptedProvider } from "../scripted-provider.js";
+import { type Script, answer, scriptedProvider } from "../scripted-provider.js";
 import { Plugin } from "@opencode/plugin";
 import { delegationScript } from "./delegation.js";
 
+function prompted(request: Parameters<Script>[0], text: string): boolean {
+  return request.prompt.some(
+    (message) =>
+      message.role === MessageRole.User &&
+      message.content.some((part) => part.type === ContentKind.Text && part.text.includes(text)),
+  );
+}
+
 const provider = scriptedProvider(async (request) => {
-  if (
-    request.prompt.some(
-      (message) =>
-        message.role === MessageRole.User &&
-        message.content.some(
-          (part) => part.type === ContentKind.Text && part.text.includes("omsago_GUARD"),
-        ),
-    )
-  ) {
+  if (prompted(request, "omsago_GUARD")) {
     if (request.prompt.some((message) => message.role === MessageRole.Tool))
       return answer("guard checked");
     return {
@@ -28,16 +28,31 @@ const provider = scriptedProvider(async (request) => {
       finishReason: { unified: "tool-calls", raw: "tool_calls" },
     };
   }
-  if (
-    request.prompt.some(
-      (message) =>
-        message.role === MessageRole.User &&
-        message.content.some(
-          (part) => part.type === ContentKind.Text && part.text.includes("omsago_"),
-        ),
+  if (prompted(request, "omsago_")) return delegationScript(request);
+  if (prompted(request, "List the sessions.")) {
+    if (
+      request.prompt.some(
+        (message) =>
+          message.role === MessageRole.Tool &&
+          message.content.some(
+            (part) => part.type === ContentKind.ToolResult && part.toolName === "session_list",
+          ),
+      )
     )
-  )
-    return delegationScript(request);
+      return answer("sessions listed");
+    return {
+      ...answer(""),
+      content: [
+        {
+          type: ContentKind.ToolCall,
+          toolCallId: "omsago-sessions",
+          toolName: "session_list",
+          input: "{}",
+        },
+      ],
+      finishReason: { unified: "tool-calls", raw: "tool_calls" },
+    };
+  }
   if (request.prompt.some((message) => message.role === MessageRole.Tool))
     return answer("omsago ready");
   return {

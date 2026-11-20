@@ -74,34 +74,36 @@ const session = z.object({ data: z.object({ id: z.string() }) }).parse(
     model: { providerID: "omsago-test", id: "scripted" },
   }),
 ).data;
+const contextRecords = z.object({
+  data: z.array(
+    z.object({
+      type: z.string(),
+      content: z
+        .array(
+          z.object({
+            type: z.string(),
+            name: z.string().optional(),
+            text: z.string().optional(),
+            state: z
+              .object({
+                status: z.string(),
+                content: z.json().optional(),
+                metadata: z.object({ name: z.string().optional() }).optional(),
+              })
+              .optional(),
+          }),
+        )
+        .optional(),
+    }),
+  ),
+});
+const sessionParts = async (id: string) =>
+  contextRecords
+    .parse(await host.request(`/api/session/${id}/context`))
+    .data.flatMap((record) => record.content ?? []);
 await host.request(`/api/session/${session.id}/prompt`, { text: "Load the git-master skill." });
 await host.request(`/api/session/${session.id}/command`, { name: "fixture-wait", text: "" });
-const records = z
-  .object({
-    data: z.array(
-      z.object({
-        type: z.string(),
-        content: z
-          .array(
-            z.object({
-              type: z.string(),
-              name: z.string().optional(),
-              text: z.string().optional(),
-              state: z
-                .object({
-                  status: z.string(),
-                  content: z.json().optional(),
-                  metadata: z.object({ name: z.string().optional() }).optional(),
-                })
-                .optional(),
-            }),
-          )
-          .optional(),
-      }),
-    ),
-  })
-  .parse(await host.request(`/api/session/${session.id}/context`)).data;
-const parts = records.flatMap((record) => record.content ?? []);
+const parts = await sessionParts(session.id);
 assert.ok(
   parts.some(
     (part) =>
@@ -109,7 +111,7 @@ assert.ok(
       part.name === "skill" &&
       part.state?.status === ToolStateStatus.Completed,
   ),
-  JSON.stringify(records),
+  JSON.stringify(parts),
 );
 assert.equal(
   parts.find((part) => part.type === PartKind.Tool && part.name === "skill")?.state?.metadata?.name,
@@ -118,8 +120,17 @@ assert.equal(
 );
 assert.ok(
   parts.some((part) => part.type === PartKind.Text && part.text === "omsago ready"),
-  JSON.stringify(records),
+  JSON.stringify(parts),
 );
+await host.request(`/api/session/${session.id}/prompt`, { text: "List the sessions." });
+await host.request(`/api/session/${session.id}/command`, { name: "fixture-wait", text: "" });
+const listed = (await sessionParts(session.id)).find(
+  (part) => part.type === PartKind.Tool && part.name === "session_list",
+);
+assert.equal(listed?.state?.status, ToolStateStatus.Completed, JSON.stringify(listed));
+const listing = JSON.stringify(listed.state.content);
+assert.ok(listing.includes(session.id), listing);
+assert.ok(!listing.includes("ENOTFOUND"), listing);
 const delegation = await verifyDelegation(host, selected.id);
 const guard = await verifyGuard(host, selected.id, directory);
 const lifecycle = await verifyLifecycle(host, directory, sources);
@@ -128,6 +139,7 @@ console.log(
     activation: "passed",
     turn: "passed",
     skill: "passed",
+    sessions: "passed",
     ...delegation,
     ...guard,
     ...lifecycle,
