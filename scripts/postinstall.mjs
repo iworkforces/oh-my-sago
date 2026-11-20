@@ -3,10 +3,26 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 const directory = join(homedir(), ".omsago");
-mkdirSync(directory, { recursive: true });
+const seed = join(directory, "omsago.json");
 
-try {
-  writeFileSync(join(directory, "omsago.json"), "{}\n", { flag: "wx" });
-} catch (error) {
-  if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
+// An unwritable home only costs the seed, so installing warns and carries on.
+function warn(path, error) {
+  const reason = error instanceof Error && "code" in error ? String(error.code) : String(error);
+  console.error(`omsago: could not write ${path} (${reason})`);
 }
+
+function seedConfiguration() {
+  try {
+    mkdirSync(directory, { recursive: true });
+  } catch (error) {
+    warn(directory, error);
+    return;
+  }
+  try {
+    writeFileSync(seed, "{}\n", { flag: "wx" });
+  } catch (error) {
+    if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) warn(seed, error);
+  }
+}
+
+seedConfiguration();
