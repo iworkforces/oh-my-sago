@@ -41,7 +41,9 @@ const types = [
   SessionEventType.ToolSuccess,
   SessionEventType.ToolFailed,
   SessionEventType.RetryScheduled,
+  SessionEventType.CompactionStarted,
   SessionEventType.CompactionEnded,
+  SessionEventType.CompactionFailed,
 ] as const;
 
 type NativeEvent = SelectedEvent<OpenCodeEvent, (typeof types)[number]>;
@@ -81,10 +83,19 @@ const seed = Symbol("seed");
 type Resync = { readonly connection: Connection };
 type Queued = NativeEvent | typeof seed | Resync;
 
-/** v1 todos carry no `id`; OmO keys them by content and priority. */
+/**
+ * v1 todos carry no `id`; OmO keys them by content and priority. The legacy SDK defines no
+ * compaction start or failure, but OmO's compaction registry reads both, by session only.
+ */
 export type LegacyEvent =
   | Exclude<Event, EventTodoUpdated>
-  | { type: typeof LegacyEventType.TodoUpdated; properties: { sessionID: string; todos: Todo[] } };
+  | { type: typeof LegacyEventType.TodoUpdated; properties: { sessionID: string; todos: Todo[] } }
+  | {
+      type:
+        | typeof LegacyEventType.SessionCompactionStarted
+        | typeof LegacyEventType.SessionCompactionFailed;
+      properties: { sessionID: string };
+    };
 
 export interface LegacyEventSink {
   // Method syntax keeps OmO's `Hooks`, typed against the id-carrying todo, assignable here.
@@ -396,10 +407,25 @@ export function clientEvents(
                   });
                 break;
               }
+              case SessionEventType.CompactionStarted:
+                await now({
+                  type: LegacyEventType.SessionCompactionStarted,
+                  properties: { sessionID },
+                });
+                break;
               case SessionEventType.CompactionEnded:
                 pending.push({
                   sessionID,
                   event: { type: LegacyEventType.SessionCompacted, properties: { sessionID } },
+                });
+                break;
+              case SessionEventType.CompactionFailed:
+                pending.push({
+                  sessionID,
+                  event: {
+                    type: LegacyEventType.SessionCompactionFailed,
+                    properties: { sessionID },
+                  },
                 });
                 break;
               case SessionEventType.InboxDelivered:
