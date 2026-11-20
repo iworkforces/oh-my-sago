@@ -55,6 +55,12 @@ with OpenCode v2; the bridge does not implement another authentication system.
   publishes every directory's session events on one bus. Each instance translates
   only its own directory's sessions, so one finished turn produces one
   `session.idle` and at most one todo-continuation countdown and prompt.
+- An OpenCode v2 session can go idle while work it owns still runs, such as a
+  background shell or a Code Mode script that outlived its call, and that
+  work's notice wakes the session again. omsago holds back `session.idle` and
+  keeps reporting the session busy until it goes idle with none of its own work
+  left. Otherwise OmO would complete a background task early, then abort and
+  delete its session while the subagent was still working.
 - Native compaction start and failure reach OmO as
   `session.compaction.started` and `session.compaction.failed`. OmO's model
   fallback uses them to hold its timeout and error handling while a compaction
@@ -62,7 +68,11 @@ with OpenCode v2; the bridge does not implement another authentication system.
 - OmO's `session_list`, `session_read`, and `session_search` tools first try a
   global SDK client at the plugin's `serverUrl`. omsago gives OmO a loopback
   address that answers every request with `NotFoundError`, so these tools fall
-  back to the plugin client, which reads sessions from the native v2 APIs.
+  back to the plugin client, which reads sessions from the native v2 APIs. All
+  instances for one directory share that address, and it stays up for the
+  reload hand-off window after the last of them closes. A runtime that was
+  reloaded away therefore still reaches the plugin client rather than falling
+  back to OmO's own file storage.
 - Tools that OmO's configuration turns off in `tools`, such as `grep_app_*` or
   the task tools that its task system replaces, become native deny rules, so the
   model does not see them. OmO's per-agent permissions can still allow them.
@@ -72,7 +82,9 @@ with OpenCode v2; the bridge does not implement another authentication system.
   client calls to the newer instance for the same directory, waiting up to 10
   seconds for it to open, and fails with HTTP 503 only if none does. A late call
   from the old runtime therefore still takes effect: it can prompt or abort the
-  session it names.
+  session it names. The hand-off matches calls by method, path, headers, and
+  body, not by omsago's internal client address, so instances of different
+  omsago versions can hand calls to each other.
 
 The native CLI integration suite exercises a real OmO agent turn and skill,
 protected writes, synchronous delegation, background completion and failure,
@@ -97,11 +109,28 @@ OmO's configuration hook runs against a view that omsago builds from the native
 v2 runtime, not against your merged `opencode.json`. That view carries only
 agents, the selected model, and commands, so OmO never sees `mcp`,
 `permission`, `default_agent`, `formatter`, or `skills`. OpenCode still
-applies those fields natively, so your own settings keep working, but OmO does
-not take them into account: it keeps its own default agent, does not use your
-formatters for its own edits, and does not read the skill sources you declare in
+applies those fields natively, after OmO's, so your own settings take
+precedence:
+
+- Your `default_agent` stays the default when it names a primary agent. OmO
+  turns `build` and `plan` into hidden subagents, so naming either one leaves
+  OmO's default in place.
+- Your permission rules come after OmO's per-agent rules, so a deny of yours,
+  for example for `webfetch` or an `external_directory` path, overrides
+  OmO's allow.
+- An MCP server you define keeps your definition when OmO's configuration has
+  one with the same name. omsago logs a warning and does not use OmO's.
+
+OmO itself still does not see these fields. It does not use your formatters for
+its own edits, and does not read the skill sources you declare in
 configuration. Put the equivalent setting in OmO's own configuration when you
 want OmO itself to follow it.
+
+OmO keeps some clients in module-level state that the most recently started
+instance replaces, including the client behind its session tools and its
+background-task toasts. When one OpenCode process runs OmO for several
+directories at once, those features can use the client of the directory that
+started last. omsago cannot scope that state without changing OmO.
 
 Some native events have no legacy translation. An interrupted turn reaches OmO
 as a `session.error` with an abort, not as a separate stop event. Permission

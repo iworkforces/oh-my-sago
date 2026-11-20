@@ -10,7 +10,9 @@ import {
   ErrorName,
   LegacyEventType,
   MessageRole,
+  NativeAction,
   PartKind,
+  PermissionEffect,
   RecordType,
   SessionEventType,
   SessionOutcome,
@@ -18,7 +20,7 @@ import {
   ToolStateStatus,
 } from "../../../src/enums.js";
 import { EventLog, compactionOf, idleOf } from "./events.js";
-import type { ClientModel } from "./model.js";
+import { backgroundRelease, type ClientModel } from "./model.js";
 
 type Scenario =
   | "turns"
@@ -33,7 +35,8 @@ type Scenario =
   | "variants"
   | "queuedOverrides"
   | "overridesAfterFailure"
-  | "rejectedSwitch";
+  | "rejectedSwitch"
+  | "backgroundWait";
 
 /**
  * Relays a subscription, slipping in a `session.compaction.ended` that no compaction of ours
@@ -511,6 +514,32 @@ export async function verifyTurns(
     /Unknown model omsago-test\/missing/,
   );
   assert.deepEqual(await snapshot(), original);
+
+  const { id: owner } = await context.session.create({
+    title: "client background wait",
+    location: { directory: context.location.directory },
+    permissions: [{ action: NativeAction.Shell, resource: "*", effect: PermissionEffect.Allow }],
+  });
+  const backgrounded = log.mark();
+  const firstExecution = await client.session.prompt({
+    path: { id: owner },
+    body: { parts: [{ type: ContentKind.Text, text: "CLIENT_BACKGROUND" }] },
+  });
+  assert.ok(firstExecution.data, JSON.stringify(firstExecution.error));
+  // The execution ended with its shell still waiting, so the shell's notice will wake the session.
+  assert.equal((await client.session.status()).data?.[owner]?.type, SessionStatusKind.Busy);
+  await Bun.write(`${context.location.directory}/${backgroundRelease}`, "");
+  await log.until(idleOf(owner), "idle after the background shell's notice", backgrounded);
+  const replies = (await client.session.messages({ path: { id: owner } })).data
+    ?.flatMap((message) => message.parts)
+    .filter((part) => part.type === PartKind.Text && part.text === "client boundary reply");
+  assert.equal(replies?.length, 2, JSON.stringify(replies));
+  assert.equal(
+    log.since(backgrounded, owner).filter((event) => event.type === LegacyEventType.SessionIdle)
+      .length,
+    1,
+  );
+  assert.equal((await client.session.status()).data?.[owner]?.type, SessionStatusKind.Idle);
   return {
     turns: "passed",
     errors: "passed",
@@ -525,5 +554,6 @@ export async function verifyTurns(
     queuedOverrides: "passed",
     overridesAfterFailure: "passed",
     rejectedSwitch: "passed",
+    backgroundWait: "passed",
   } as const;
 }

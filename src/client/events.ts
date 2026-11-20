@@ -7,7 +7,13 @@ import type { Todo } from "@opencode-ai/sdk/v2";
 import { ErrorName, LegacyEventType, SessionEventType, SessionStatusKind } from "../enums.js";
 import { BridgeError, assertNever } from "./errors.js";
 import { legacyError, legacyMessages } from "./messages.js";
-import { type SessionRetries, isBusy, legacySession, listSessions } from "./sessions.js";
+import {
+  type BackgroundWaits,
+  type SessionRetries,
+  isBusy,
+  legacySession,
+  listSessions,
+} from "./sessions.js";
 import { abortedBy, raceAbort } from "./signal.js";
 import type { ClientSessionState } from "./state.js";
 import { recordTodos } from "./todos.js";
@@ -111,6 +117,7 @@ export interface ClientEvents {
 export function clientEvents(
   context: Plugin.Context,
   retries: SessionRetries,
+  waits: BackgroundWaits,
   state: ClientSessionState,
   bounds: Partial<EventBounds> = {},
 ): ClientEvents {
@@ -140,6 +147,7 @@ export function clientEvents(
     resynced.delete(sessionID);
     foreign.delete(sessionID);
     retries.clear(sessionID);
+    waits.delete(sessionID);
     state.delete(sessionID);
   };
   /** Stops serving a session that belongs to another location, forgetting it if it moved away. */
@@ -169,6 +177,10 @@ export function clientEvents(
       if (stopping !== undefined) throw new BridgeError(409, "The client bridge is stopped");
       if (running !== undefined)
         throw new BridgeError(409, "The client bridge event subscription already started");
+      // OpenCode runs this just before the session's `session.execution.succeeded`.
+      const idleHook = await context.session.hook("experimental.idle", (event) => {
+        waits.record(event);
+      });
       const run = new AbortController();
       const signal = AbortSignal.any([controller.signal, run.signal]);
       const options = { signal };
@@ -361,12 +373,14 @@ export function clientEvents(
                 await now(status(sessionID, SessionStatusKind.Busy));
                 break;
               case SessionEventType.ExecutionFailed:
+                waits.delete(sessionID);
                 await settle({
                   type: LegacyEventType.SessionError,
                   properties: { sessionID, error: legacyError(event.data.error) },
                 });
                 break;
               case SessionEventType.ExecutionInterrupted:
+                waits.delete(sessionID);
                 await settle({
                   type: LegacyEventType.SessionError,
                   properties: {
@@ -376,7 +390,7 @@ export function clientEvents(
                 });
                 break;
               case SessionEventType.ExecutionSucceeded:
-                await settle();
+                if (!waits.has(sessionID)) await settle();
                 break;
               case SessionEventType.RetryScheduled: {
                 const retry = {
@@ -460,7 +474,11 @@ export function clientEvents(
       const catchUp = async (session: SessionInfo): Promise<void> => {
         const known = sessions.get(session.id);
         const idle = session.time.idle;
-        const finished = !isBusy(session) && idle !== undefined && idle !== settled.get(session.id);
+        const finished =
+          !isBusy(session) &&
+          idle !== undefined &&
+          idle !== settled.get(session.id) &&
+          !waits.has(session.id);
         if (!isBusy(session)) retries.clear(session.id);
         if (!finished && JSON.stringify(known) === JSON.stringify(session)) return;
         const records = await raceAbort(
@@ -613,7 +631,13 @@ export function clientEvents(
         });
       const pumping = guard(pump());
       enqueue(seed);
-      running = Promise.all([pumping, guard(work())]).then(() => undefined);
+      running = (async () => {
+        try {
+          await Promise.all([pumping, guard(work())]);
+        } finally {
+          await idleHook.dispose();
+        }
+      })();
       const deadline = setTimeout(() => {
         run.abort(
           new BridgeError(504, `The client bridge did not load sessions within ${startMs}ms`),

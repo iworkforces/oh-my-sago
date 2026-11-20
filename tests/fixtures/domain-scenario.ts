@@ -113,6 +113,7 @@ const servers = z
 const serverStatus = Object.fromEntries(servers.map((item) => [item.name, item.status.status]));
 assert.equal(serverStatus["bridge-valid"], "disabled", JSON.stringify(servers));
 assert.equal(serverStatus["bridge-configured"], "disabled", JSON.stringify(servers));
+assert.equal(serverStatus["bridge-native"], "disabled", JSON.stringify(servers));
 for (const name of ["bridge-extra-key", "bridge-unsupported", "bridge-no-definition"])
   assert.equal(serverStatus[name], undefined, JSON.stringify(servers));
 

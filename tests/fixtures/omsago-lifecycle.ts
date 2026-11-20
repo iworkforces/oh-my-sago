@@ -103,10 +103,11 @@ export async function verifyLifecycle(
   );
   await closed(initial);
   const replaced = await active();
-  await Bun.write(
-    join(directory, "opencode.json"),
-    JSON.stringify({ plugins: plugins.slice(0, 1), model: "omsago-test/scripted" }),
-  );
+  const config = join(directory, "opencode.json");
+  const settings = z
+    .record(z.string(), z.unknown())
+    .parse(JSON.parse(await readFile(config, "utf8")));
+  await Bun.write(config, JSON.stringify({ ...settings, plugins: plugins.slice(0, 1) }));
   await host.request("/api/location/reload", {});
   await host.request("/api/model");
   assert.equal(
@@ -117,10 +118,7 @@ export async function verifyLifecycle(
   );
   await closed(replaced);
   assert.equal((await active()).length, 0);
-  await Bun.write(
-    join(directory, "opencode.json"),
-    JSON.stringify({ plugins, model: "omsago-test/scripted" }),
-  );
+  await Bun.write(config, JSON.stringify({ ...settings, plugins }));
   await host.request("/api/location/reload", {});
   await host.request("/api/model");
   assert.deepEqual(
