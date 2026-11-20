@@ -15,7 +15,8 @@ import {
   ToolResultKind,
   ToolStateStatus,
 } from "../src/enums.js";
-import { transformMessages } from "../src/session/messages.js";
+import { hideMarkers, markerMetadata, showMarkers } from "../src/session/markers.js";
+import { cleanInternalPrompts, transformMessages } from "../src/session/messages.js";
 
 function request(messages: SessionRequest["messages"]): SessionRequest {
   return {
@@ -438,4 +439,62 @@ test("a transform that throws leaves the request untouched", async () => {
     expect(event.messages).toBe(messages);
     expect(event.messages).toEqual(snapshot);
   }
+});
+
+const done = "<system-reminder>\n[BACKGROUND TASK COMPLETED]\n</system-reminder>";
+const initiator = "<!-- OMO_INTERNAL_INITIATOR -->";
+const noReply = "<!-- OMO_INTERNAL_NOREPLY -->";
+
+test("the model gets OmO notices without markers or a reminder repeated within the turn", () => {
+  const next = "<system-reminder>\n[BACKGROUND TASK ERROR]\n</system-reminder>";
+  const deposit = {
+    id: "deposit",
+    role: MessageRole.User,
+    metadata: { owner: "omo" },
+    content: [textPart(`${done}\n${initiator}\n\n${noReply}`)],
+  };
+  const reply = {
+    id: "reply",
+    role: MessageRole.User,
+    content: [textPart(`${done}\n${initiator}`)],
+  };
+  const merged = {
+    id: "merged",
+    role: MessageRole.User,
+    content: [textPart(`${done}\n\n${next}`)],
+  };
+  const assistant = { id: "assistant", role: MessageRole.Assistant, content: [textPart("ack")] };
+  const repeated = { id: "repeated", role: MessageRole.User, content: [textPart(done)] };
+  const messages = cleanInternalPrompts([deposit, reply, merged, assistant, repeated]);
+  expect(messages).toEqual([
+    { ...deposit, content: [textPart(done)] },
+    { ...merged, content: [textPart(next)] },
+    assistant,
+    repeated,
+  ]);
+  expect(messages[2]).toBe(assistant);
+  expect(messages[3]).toBe(repeated);
+});
+
+test("OmO reads back the markers a stored prompt was saved without", async () => {
+  const hidden = hideMarkers(`${done}\n${initiator}\n\n${noReply}`);
+  expect(hidden).toEqual({ text: done, markers: [initiator, noReply] });
+  const stored = {
+    id: "notice",
+    role: MessageRole.User,
+    metadata: { [markerMetadata]: hidden.markers },
+    content: [textPart(hidden.text)],
+  };
+  const event = request([stored]);
+  const shown: string[] = [];
+  await transformMessages(event, {
+    async "experimental.chat.messages.transform"(_input, output) {
+      for (const part of output.messages.flatMap((message) => message.parts))
+        if (part.type === PartKind.Text) shown.push(part.text);
+    },
+  });
+  expect(shown).toEqual([showMarkers(hidden.text, stored.metadata)]);
+  expect(shown[0]).toContain(initiator);
+  expect(shown[0]).toContain(noReply);
+  expect(event.messages[0]).toBe(stored);
 });
