@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, realpath, symlink } from "node:fs/promises";
+import { chmod, mkdir, realpath, symlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,8 +7,7 @@ import { z } from "zod";
 import { PartKind, PermissionEffect, RecordType, ToolStateStatus } from "../../src/enums.js";
 import { cliHost } from "./cli-host.js";
 
-const directory = process.argv[2];
-assert.ok(directory);
+const directory = z.string().min(1).parse(process.argv[2]);
 const sources = [fileURLToPath(new URL("./discovery-plugin/", import.meta.url))];
 await mkdir(join(directory, ".omo"));
 await Bun.write(
@@ -48,7 +47,7 @@ const contextSchema = z.object({
           z.object({
             type: z.string(),
             name: z.string().optional(),
-            state: z.object({ status: z.string(), content: z.unknown().optional() }).optional(),
+            state: z.object({ status: z.string(), content: z.json().optional() }).optional(),
           }),
         )
         .optional(),
@@ -68,6 +67,14 @@ async function markdown(path: string, text: string) {
   await mkdir(dirname(path), { recursive: true });
   await Bun.write(path, text);
 }
+// A root user can read files with mode 000, so the unreadable-entry checks only run unprivileged.
+const unprivileged = process.getuid?.() !== 0;
+await using restore = new AsyncDisposableStack();
+// The `.agents` commands root is itself a link into a dotfiles tree, as a stow or chezmoi layout has.
+const dotfiles = join(homedir(), "dotfiles");
+await mkdir(join(dotfiles, "agents-commands"), { recursive: true });
+await mkdir(join(homedir(), ".agents"), { recursive: true });
+await symlink(join(dotfiles, "agents-commands"), join(homedir(), ".agents", "commands"));
 const homes = [".agents", ".opencode"];
 for (const [index, root] of homes.entries()) {
   await markdown(
@@ -93,6 +100,26 @@ await markdown(
   join(homedir(), ".opencode", "commands", "invalid-metadata.md"),
   "---\nmodel: false\n---\nInvalid command metadata.",
 );
+if (unprivileged) {
+  const unreadableCommand = join(homedir(), ".opencode", "commands", "unreadable-command.md");
+  const unreadableSkill = join(homedir(), ".opencode", "skills", "unreadable", "SKILL.md");
+  const lockedDirectory = join(homedir(), ".opencode", "skills", "locked");
+  await markdown(unreadableCommand, "Unreadable command.");
+  await markdown(
+    unreadableSkill,
+    "---\nname: discovery-unreadable\n---\nUnreadable skill instructions.",
+  );
+  await markdown(
+    join(lockedDirectory, "SKILL.md"),
+    "---\nname: discovery-locked\n---\nLocked skill instructions.",
+  );
+  for (const file of [unreadableCommand, unreadableSkill]) {
+    await chmod(file, 0o000);
+    restore.defer(() => chmod(file, 0o644));
+  }
+  await chmod(lockedDirectory, 0o000);
+  restore.defer(() => chmod(lockedDirectory, 0o755));
+}
 await markdown(join(homedir(), ".agents", "commands", "nested", "review.md"), "nested $ARGUMENTS");
 await markdown(
   join(homedir(), ".opencode", "skills", "collection", "deep", "nested", "SKILL.md"),
@@ -110,6 +137,40 @@ await symlink(
 );
 await symlink(join(directory, "absent"), join(homedir(), ".opencode", "skills", "broken"));
 await symlink("self", join(homedir(), ".opencode", "skills", "self"));
+// Links that would walk HOME, `/` or an ancestor of the discovery root, each with a marker that
+// only such a walk could find. They sit under `.opencode` because OpenCode itself also scans
+// `.agents/skills` and would surface the markers through its own walk.
+const scenarioRoot = dirname(homedir());
+await markdown(
+  join(homedir(), "elsewhere", "SKILL.md"),
+  "---\nname: discovery-home-marker\n---\nHome marker instructions.",
+);
+await markdown(
+  join(scenarioRoot, "ancestor-marker", "SKILL.md"),
+  "---\nname: discovery-ancestor-marker\n---\nAncestor marker instructions.",
+);
+await symlink(homedir(), join(homedir(), ".opencode", "skills", "home-link"));
+await symlink("/", join(homedir(), ".opencode", "skills", "root-link"));
+await symlink(scenarioRoot, join(homedir(), ".opencode", "skills", "ancestor-link"));
+await symlink(homedir(), join(homedir(), ".opencode", "commands", "home-link"));
+await symlink(scenarioRoot, join(homedir(), ".opencode", "commands", "ancestor-link"));
+// A skill linked per entry to a sibling dotfiles directory, and a large tree that is no ancestor.
+await markdown(
+  join(dotfiles, "skills", "dotted", "SKILL.md"),
+  "---\nname: discovery-dotfiles\ndescription: linked per entry\n---\nDotfiles instructions.",
+);
+await symlink(join(dotfiles, "skills", "dotted"), join(homedir(), ".opencode", "skills", "dotted"));
+const large = join(dotfiles, "large");
+await Promise.all(
+  Array.from({ length: 100 }, (_, index) =>
+    markdown(join(large, `group-${index}`, "notes.md"), "Not a skill."),
+  ),
+);
+await markdown(
+  join(large, "group-99", "deep", "tree", "SKILL.md"),
+  "---\nname: discovery-large\n---\nLarge tree instructions.",
+);
+await symlink(large, join(homedir(), ".opencode", "skills", "large"));
 await markdown(join(directory, "commands", "project-wins.md"), "project argument=$ARGUMENTS");
 await markdown(
   join(directory, "skills", "project", "SKILL.md"),
@@ -125,6 +186,8 @@ await using host = await cliHost(directory, sources);
 await host.request("/api/model");
 const inventory = commandsSchema.parse(await host.request("/api/command")).data;
 assert.ok(inventory.every((command) => command.name !== "invalid-metadata"));
+assert.ok(inventory.every((command) => command.name !== "unreadable-command"));
+assert.ok(inventory.every((command) => !/^(home|ancestor)-link\//.test(command.name)));
 console.error(
   JSON.stringify({
     commands: inventory.filter((command) =>
@@ -139,6 +202,16 @@ for (const name of ["from-0", "from-1", "nested/review", "explicit-wins", "proje
   );
 const skills = skillsSchema.parse(await host.request("/api/skill")).data;
 assert.ok(skills.every((skill) => skill.name !== "discovery-invalid-yaml"));
+assert.ok(
+  skills.every(
+    (skill) => skill.name !== "discovery-unreadable" && skill.name !== "discovery-locked",
+  ),
+);
+assert.ok(
+  skills.every(
+    (skill) => skill.name !== "discovery-home-marker" && skill.name !== "discovery-ancestor-marker",
+  ),
+);
 console.error(
   JSON.stringify({ skills: skills.filter((skill) => skill.name.startsWith("discovery-")) }),
 );
@@ -147,6 +220,8 @@ for (const name of [
   "discovery-skill-1",
   "discovery-nested",
   "discovery-symlink",
+  "discovery-dotfiles",
+  "discovery-large",
 ])
   assert.ok(
     skills.some((skill) => skill.name === name),
@@ -186,7 +261,9 @@ for (const [name, expected] of [
     await host.request(`/api/session/${current.id}/context`),
   ).data;
   assert.ok(
-    records.some((record) => record.type === RecordType.User && record.text?.includes(expected)),
+    records.some(
+      (record) => record.type === RecordType.User && record.text?.includes(expected) === true,
+    ),
     JSON.stringify({ name, expected, records }),
   );
 }
@@ -217,5 +294,10 @@ console.log(
     skills: "passed",
     skillLoading: "passed",
     precedence: "passed",
+    protectedLinks: "passed",
+    dotfilesLinks: "passed",
+    rootSymlink: "passed",
+    largeTree: "passed",
+    unreadable: unprivileged ? "passed" : "skipped",
   }),
 );

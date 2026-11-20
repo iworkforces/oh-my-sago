@@ -1,5 +1,8 @@
+import type { Agent } from "@opencode/plugin";
 import { z } from "zod";
 import { LegacyAction, NativeAction, permissionEffects } from "../enums.js";
+
+export type NativePermission = Agent.Info["permissions"][number];
 
 const effect = z.enum(permissionEffects);
 const rules = z.union([
@@ -22,7 +25,7 @@ export function nativeAction(action: string): string {
   }
 }
 
-export function nativePermissions(value: unknown) {
+export function nativePermissions(value: z.input<typeof rules> | undefined): NativePermission[] {
   return Object.entries(rules.parse(value ?? {})).flatMap(([key, rule]) => {
     const action = nativeAction(key);
     return typeof rule === "string"

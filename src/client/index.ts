@@ -1,13 +1,17 @@
 import { $ } from "bun";
 import type { Plugin } from "@opencode/plugin";
-import type { Hooks, PluginInput, WorkspaceAdapter } from "@opencode-ai/plugin";
+import type { PluginInput, WorkspaceAdapter } from "@opencode-ai/plugin";
 import { createOpencodeClient } from "@opencode-ai/sdk";
 import { createOpencodeClient as createSkillClient } from "@opencode-ai/sdk/v2";
 import { z } from "zod";
+import { type ToastEmitter, toast } from "../toast.js";
 import { currentProject, discoveryRoute } from "./discovery.js";
 import { BridgeError, errorResponse, unsupported } from "./errors.js";
-import { clientEvents } from "./events.js";
+import { type LegacyEventSink, clientEvents } from "./events.js";
+import { body } from "./requests.js";
+import { SessionRetries } from "./sessions.js";
 import { sessionRoutes } from "./session-routes.js";
+import { raceAbort } from "./signal.js";
 import { ClientSessionState } from "./state.js";
 
 export type ClientBridge = {
@@ -18,19 +22,51 @@ export type ClientBridge = {
     };
   };
   readonly sessionState: ClientSessionState;
-  readonly start: (hooks: Hooks) => Promise<void>;
-  readonly dispose: () => Promise<void>;
+  readonly start: (hooks: LegacyEventSink) => Promise<void>;
+  /** Stops event delivery while the legacy client keeps answering requests. */
+  readonly stop: () => Promise<void>;
+  /** Stops event delivery and fails every later legacy client request; idempotent. */
+  readonly close: () => Promise<void>;
 };
 
-export function createClientBridge(context: Plugin.Context): ClientBridge {
+export function createClientBridge(context: Plugin.Context, toasts: ToastEmitter): ClientBridge {
   const sessionState = new ClientSessionState();
-  const sessions = sessionRoutes(context, sessionState);
-  const events = clientEvents(context);
+  const retries = new SessionRetries();
+  const sessions = sessionRoutes(context, sessionState, retries);
+  const events = clientEvents(context, retries, sessionState);
+  let closed = false;
+  const showToast = async (request: Request): Promise<Response> => {
+    const input = await body(request, toast);
+    try {
+      await toasts.emit("toast", input);
+    } catch (error) {
+      console.error("Client bridge could not deliver a toast", error);
+    }
+    return Response.json(true);
+  };
   const serverUrl = new URL("http://omsago.invalid");
+  const route = async (request: Request): Promise<Response> => {
+    try {
+      const url = new URL(request.url);
+      if (url.origin !== serverUrl.origin)
+        throw new BridgeError(400, "The client bridge cannot route a foreign origin");
+      const path = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
+      if (path[0] === "session") return await sessions(request, path);
+      if (request.method === "POST" && url.pathname === "/tui/show-toast")
+        return await showToast(request);
+      return await discoveryRoute(context, request);
+    } catch (error) {
+      if (request.signal.aborted || !(error instanceof Error)) throw error;
+      if (error instanceof z.ZodError || error instanceof SyntaxError || error instanceof URIError)
+        return errorResponse(new BridgeError(400, error.message));
+      return errorResponse(error);
+    }
+  };
   const transport = async (
     input: string | Request | URL,
     init?: RequestInit,
   ): Promise<Response> => {
+    if (closed) throw new BridgeError(503, "The client bridge is closed");
     const request =
       input instanceof Request
         ? init === undefined
@@ -38,20 +74,8 @@ export function createClientBridge(context: Plugin.Context): ClientBridge {
           : new Request(input, init)
         : new Request(input.toString(), init);
     request.signal.throwIfAborted();
-    try {
-      const url = new URL(request.url);
-      if (url.origin !== serverUrl.origin)
-        throw new BridgeError(400, "The client bridge cannot route a foreign origin");
-      const path = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
-      return path[0] === "session"
-        ? await sessions(request, path)
-        : await discoveryRoute(context, request);
-    } catch (error) {
-      if (request.signal.aborted) throw error;
-      if (error instanceof z.ZodError || error instanceof SyntaxError || error instanceof URIError)
-        return errorResponse(new BridgeError(400, error.message));
-      return errorResponse(error);
-    }
+    // The caller stops waiting while the route runs on; only POST /session/:id/abort interrupts.
+    return raceAbort(request.signal, route(request));
   };
   const config = {
     baseUrl: serverUrl.href,
@@ -81,7 +105,15 @@ export function createClientBridge(context: Plugin.Context): ClientBridge {
   return {
     input,
     sessionState,
-    start: (hooks: Parameters<typeof events.start>[0]) => events.start(hooks),
-    dispose: () => events.dispose(),
+    start: (hooks: LegacyEventSink) => events.start(hooks),
+    stop: async () => {
+      await events.stop();
+      retries.stop();
+    },
+    close: async () => {
+      closed = true;
+      await events.stop();
+      retries.stop();
+    },
   };
 }

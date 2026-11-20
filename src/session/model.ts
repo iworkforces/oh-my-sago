@@ -4,7 +4,99 @@ import type { Model, UserMessage } from "@opencode-ai/sdk";
 import type { Hooks, ProviderContext } from "@opencode-ai/plugin";
 import { BridgeError } from "../client/errors.js";
 import { legacyMessages } from "../client/messages.js";
+import { metadata } from "../domains/value.js";
 import { MessageRole } from "../enums.js";
+
+type ModelSelection = { readonly providerID: string; readonly id: string };
+type Options = { readonly signal: AbortSignal };
+
+/** An agent and model a prompt path asks to switch to; an explicit variant must be offered. */
+export interface SessionSwitch {
+  readonly agent?: string | undefined;
+  readonly model?: (ModelSelection & { readonly variant?: string | undefined }) | undefined;
+}
+
+/** The exact switches a validated `SessionSwitch` makes. */
+export interface ResolvedSwitch {
+  readonly agent?: string;
+  readonly model?: ModelSelection & { readonly variant?: string };
+}
+
+export async function offersVariant(
+  context: Plugin.Context,
+  model: ModelSelection,
+  variant: string,
+  options?: Options,
+): Promise<boolean> {
+  const models = await context.model.list(
+    { location: { directory: context.location.directory } },
+    options,
+  );
+  return models.data.some(
+    (entry) =>
+      entry.providerID === model.providerID &&
+      entry.id === model.id &&
+      entry.variants.some((offered) => offered.id === variant),
+  );
+}
+
+/**
+ * Checks every input of a switch before anything changes, since native switches accept unknown
+ * agents and models: the agent exists, the model is listed, and an explicit variant is one it
+ * offers. Without an explicit variant, the session's current one is kept when the model offers it.
+ */
+export async function resolveSwitch(
+  context: Plugin.Context,
+  sessionID: string,
+  request: SessionSwitch,
+  options?: Options,
+): Promise<ResolvedSwitch> {
+  const location = { directory: context.location.directory };
+  const { agent, model } = request;
+  if (
+    agent !== undefined &&
+    !(await context.agent.list({ location }, options)).data.some((entry) => entry.id === agent)
+  )
+    throw new BridgeError(404, `Unknown agent ${agent}`);
+  if (model === undefined) return agent === undefined ? {} : { agent };
+  const [session, models] = await Promise.all([
+    context.session.get({ sessionID }, options),
+    context.model.list({ location }, options),
+  ]);
+  const listed = models.data.find(
+    (entry) => entry.providerID === model.providerID && entry.id === model.id,
+  );
+  if (listed === undefined)
+    throw new BridgeError(404, `Unknown model ${model.providerID}/${model.id}`);
+  const offered = (variant: string): boolean =>
+    listed.variants.some((entry) => entry.id === variant);
+  if (model.variant !== undefined && !offered(model.variant))
+    throw new BridgeError(
+      400,
+      `Model ${model.providerID}/${model.id} does not offer variant ${model.variant}`,
+    );
+  const variant = model.variant ?? session.model?.variant;
+  return {
+    ...(agent === undefined ? {} : { agent }),
+    model: {
+      providerID: model.providerID,
+      id: model.id,
+      ...(variant !== undefined && offered(variant) ? { variant } : {}),
+    },
+  };
+}
+
+export async function applySwitch(
+  context: Plugin.Context,
+  sessionID: string,
+  resolved: ResolvedSwitch,
+  options?: Options,
+): Promise<void> {
+  if (resolved.agent !== undefined)
+    await context.session.switchAgent({ sessionID, agent: resolved.agent }, options);
+  if (resolved.model !== undefined)
+    await context.session.switchModel({ sessionID, model: resolved.model }, options);
+}
 
 export async function requestContext(
   context: Plugin.Context,
@@ -24,7 +116,12 @@ export async function requestContext(
   if (selected === undefined || owner === undefined)
     throw new BridgeError(404, `Unknown model ${request.model.providerID}/${request.model.id}`);
   const cost = selected.cost.find((tier) => tier.tier === undefined);
-  const options = { ...owner.settings, ...owner.body, ...selected.settings, ...selected.body };
+  const options = metadata({
+    ...owner.settings,
+    ...owner.body,
+    ...selected.settings,
+    ...selected.body,
+  });
   const baseURL = options["baseURL"];
   const model: Model = {
     id: selected.id,

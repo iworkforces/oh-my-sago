@@ -3,12 +3,17 @@ import { SessionOperation } from "../enums.js";
 import { BridgeError, unsupported } from "./errors.js";
 import { legacyMessages } from "./messages.js";
 import { body, createBody, updateBody } from "./requests.js";
-import { legacySession, listSessions, sessionStatus } from "./sessions.js";
+import { type SessionRetries, legacySession, listSessions } from "./sessions.js";
 import { permissionRules, type ClientSessionState } from "./state.js";
 import { promptRoutes } from "./prompts.js";
+import { sessionTodos } from "./todos.js";
 
-export function sessionRoutes(context: Plugin.Context, state: ClientSessionState) {
-  const prompt = promptRoutes(context, state);
+export function sessionRoutes(
+  context: Plugin.Context,
+  state: ClientSessionState,
+  retries: SessionRetries,
+) {
+  const prompt = promptRoutes(context);
   return async (request: Request, path: readonly string[]): Promise<Response> => {
     const options = { signal: request.signal };
     const sessionID = path[1];
@@ -43,7 +48,7 @@ export function sessionRoutes(context: Plugin.Context, state: ClientSessionState
     if (sessionID === SessionOperation.Status && request.method === "GET") {
       const sessions = await listSessions(context, request);
       return Response.json(
-        Object.fromEntries(sessions.map((session) => [session.id, sessionStatus(session)])),
+        Object.fromEntries(sessions.map((session) => [session.id, retries.status(session)])),
       );
     }
     if (sessionID === undefined) return unsupported(`session ${request.method}`);
@@ -68,9 +73,12 @@ export function sessionRoutes(context: Plugin.Context, state: ClientSessionState
         case "DELETE":
           await context.session.remove({ sessionID }, options);
           state.delete(sessionID);
+          retries.clear(sessionID);
           return Response.json(true);
       }
     }
+    if (operation === SessionOperation.Todo && request.method === "GET" && path.length === 3)
+      return Response.json(await sessionTodos(context, sessionID, options));
     if (operation === SessionOperation.Abort && request.method === "POST") {
       const result = await context.session.interrupt({ sessionID }, options);
       return Response.json(result.interrupted);

@@ -1,21 +1,58 @@
+import type { Info } from "@opencode/plugin/promise/tool";
 import { Schema } from "effect";
 import { ErrorName } from "../enums.js";
 import { z } from "zod";
 
 export class CompatibilityError extends Error {
-  constructor(readonly feature: string) {
+  readonly feature: string;
+  constructor(feature: string) {
     super(`Legacy configuration is not supported by OpenCode 2.3.0: ${feature}`);
     this.name = ErrorName.Compatibility;
+    this.feature = feature;
   }
 }
 
-export const jsonRecord = z.record(z.string(), z.json());
+export function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
-export function metadata(value: unknown): z.infer<typeof jsonRecord> {
+export const json = z.json();
+export type Json = z.infer<typeof json>;
+export const jsonRecord = z.record(z.string(), json);
+export type JsonRecord = z.infer<typeof jsonRecord>;
+
+export function metadata(value: object | undefined): JsonRecord {
   return jsonRecord.parse(JSON.parse(JSON.stringify(value ?? {})));
 }
 
-export function inputSchema(value: unknown): z.infer<typeof jsonRecord> {
+/**
+ * Converts like `metadata`, but a top-level value JSON cannot hold, such as a cycle or a BigInt,
+ * costs only its own key: the other keys and the title survive, and a warning names the drop.
+ */
+export function degradedMetadata(value: object | undefined, source: string): JsonRecord {
+  try {
+    return metadata(value);
+  } catch (error) {
+    const kept: JsonRecord = {};
+    const dropped: string[] = [];
+    const entries: Record<string, unknown> = { ...value };
+    for (const [key, entry] of Object.entries(entries)) {
+      try {
+        Object.assign(kept, metadata({ [key]: entry }));
+      } catch {
+        dropped.push(key);
+      }
+    }
+    console.warn("omsago: Dropping metadata JSON cannot hold", {
+      source,
+      keys: dropped,
+      reason: errorMessage(error),
+    });
+    return kept;
+  }
+}
+
+export function inputSchema(value: Info["input"]): JsonRecord {
   if (value instanceof z.ZodType) return jsonRecord.parse(z.toJSONSchema(value));
   if (Schema.isSchema(value)) {
     const document = Schema.toJsonSchemaDocument(value);
@@ -31,8 +68,16 @@ const nativeNames: Readonly<Record<string, string>> = {
   run_shell: "bash",
 };
 
+const legacyNames: ReadonlyMap<string, string> = new Map(
+  Object.entries(nativeNames).map(([native, legacy]) => [legacy, native]),
+);
+
 export function legacyName(name: string): string {
   return nativeNames[name] ?? name;
+}
+
+export function nativeName(name: string): string {
+  return legacyNames.get(name) ?? name;
 }
 
 export function legacyArguments(name: string, input: unknown): unknown {

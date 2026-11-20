@@ -1,8 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
-import type { ContentPart, ToolResultPart } from "@opencode/ai";
+import type { ContentPart, ToolCallPart, ToolResultPart } from "@opencode/ai";
 import type { Part, ToolPart } from "@opencode-ai/sdk";
 import { assertNever } from "../client/errors.js";
-import { CompatibilityError, nativeArguments } from "../domains/value.js";
+import { CompatibilityError, nativeArguments, nativeName } from "../domains/value.js";
 import {
   ContentKind,
   PartKind,
@@ -20,15 +20,24 @@ export const unsupported = (feature: string): never => {
   throw new CompatibilityError(`request history ${feature}`);
 };
 
-function editResult(original: ToolResultPart | undefined, part: ToolPart): ToolResultPart {
-  const base = original ?? { type: ContentKind.ToolResult, id: part.callID, name: part.tool };
+type ResultBase = Omit<ToolResultPart, "result"> & { readonly result?: ToolResultPart["result"] };
+
+/** The identity of a result answering `call`, before it has a value. */
+export const answering = (call: ToolCallPart): ResultBase => ({
+  type: ContentKind.ToolResult,
+  id: call.id,
+  name: call.name,
+  ...(call.namespace === undefined ? {} : { namespace: call.namespace }),
+});
+
+function editResult(base: ResultBase, part: ToolPart): ToolResultPart {
   switch (part.state.status) {
     case ToolStateStatus.Error:
       return { ...base, result: { type: ToolResultKind.Error, value: part.state.error } };
     case ToolStateStatus.Completed: {
       const output = part.state.output;
-      if (original?.result.type === ToolResultKind.Content) {
-        const result = original.result;
+      if (base.result?.type === ToolResultKind.Content) {
+        const result = base.result;
         let inserted = false;
         const value = result.value.flatMap<(typeof result.value)[number]>((item) => {
           if (item.type === ToolContentKind.File) return [item];
@@ -54,10 +63,29 @@ function editResult(original: ToolResultPart | undefined, part: ToolPart): ToolR
   }
 }
 
+function answered(call: ToolCallPart, part: ToolPart): ContentPart[] {
+  switch (part.state.status) {
+    case ToolStateStatus.Pending:
+    case ToolStateStatus.Running:
+      return [call];
+    case ToolStateStatus.Completed:
+    case ToolStateStatus.Error:
+      return [call, editResult(answering(call), part)];
+    default:
+      return assertNever(part.state);
+  }
+}
+
+/**
+ * Converts a legacy part back to native content. `edits` collects replacements for native results
+ * whose call part changed, keyed by the result that call was paired with; `answers` maps each
+ * restored call to that paired result.
+ */
 export function restore(
   part: Part,
   backing: Backing | undefined,
-  edits: Map<ContentPart, ContentPart>,
+  edits: Map<ToolResultPart, ToolResultPart>,
+  answers: Map<ContentPart, ToolResultPart>,
 ): ContentPart[] {
   if (backing !== undefined && isDeepStrictEqual(part, backing.before)) return [backing.native];
   switch (part.type) {
@@ -92,8 +120,10 @@ export function restore(
       const native = backing?.native;
       switch (native?.type) {
         case ContentKind.Text:
-        case ContentKind.Reasoning:
           return [{ ...native, text: value }];
+        // The signature and encrypted payload only vouch for the original text.
+        case ContentKind.Reasoning:
+          return [{ type: ContentKind.Reasoning, text: value }];
         case undefined:
           return [{ type: part.type, text: value }];
         case ContentKind.Compaction:
@@ -130,43 +160,28 @@ export function restore(
             : nativeArguments(native.name, part.state.input);
           const call = isDeepStrictEqual(input, native.input) ? native : { ...native, input };
           const result = backing?.result;
-          if (result !== undefined) {
-            if (!isDeepStrictEqual(part.state, before?.state))
-              edits.set(result, editResult(result, part));
-            return [call];
-          }
-          switch (part.state.status) {
-            case ToolStateStatus.Pending:
-            case ToolStateStatus.Running:
-              return [call];
-            case ToolStateStatus.Completed:
-            case ToolStateStatus.Error:
-              return [call, editResult(undefined, part)];
-            default:
-              return assertNever(part.state);
-          }
+          if (result === undefined) return answered(call, part);
+          answers.set(call, result);
+          if (!isDeepStrictEqual(part.state, before?.state))
+            edits.set(result, editResult(result, part));
+          return [call];
         }
         case ContentKind.ToolResult:
           if (!isDeepStrictEqual(part.state.input, before?.state.input))
             return unsupported("tool result input");
           return [editResult(native, part)];
         case undefined: {
-          const call: ContentPart = {
-            type: ContentKind.ToolCall,
-            id: part.callID,
-            name: part.tool,
-            input: part.state.input,
-          };
-          switch (part.state.status) {
-            case ToolStateStatus.Pending:
-            case ToolStateStatus.Running:
-              return [call];
-            case ToolStateStatus.Completed:
-            case ToolStateStatus.Error:
-              return [call, editResult(undefined, part)];
-            default:
-              return assertNever(part.state);
-          }
+          // A hook may write either legacy or native tool names and argument keys.
+          const name = nativeName(part.tool);
+          return answered(
+            {
+              type: ContentKind.ToolCall,
+              id: part.callID,
+              name,
+              input: nativeArguments(name, part.state.input),
+            },
+            part,
+          );
         }
         case ContentKind.Text:
         case ContentKind.Reasoning:

@@ -3,18 +3,24 @@ import { omoPlugin } from "oh-my-openagent";
 import { createClientBridge } from "./client/index.js";
 import { registerDomains } from "./domains/index.js";
 import { registerSessions } from "./session/index.js";
+import { toastRpc } from "./toast.js";
 import { registerUserDiscovery } from "./user-discovery.js";
 
 export default Plugin.define({
   id: "omsago",
   async setup(context) {
-    const bridge = createClientBridge(context);
     await using stack = new AsyncDisposableStack();
-    stack.defer(bridge.dispose);
+    const toasts = await context.rpc.register(toastRpc, {});
+    stack.defer(toasts.dispose);
+    const bridge = createClientBridge(context, toasts.events);
+    stack.defer(bridge.close);
     const discovery = await registerUserDiscovery(context);
     stack.defer(discovery.dispose);
     const hooks = await omoPlugin(bridge.input, context.options);
     if (hooks.dispose !== undefined) stack.defer(hooks.dispose);
+    // OmO aborts its child sessions through the legacy client while it shuts down, so events stop
+    // before its dispose and the transport closes only after it.
+    stack.defer(bridge.stop);
     const config = await bridge.input.client.config.get({ throwOnError: true });
     config.data.command = { ...discovery.commands, ...config.data.command };
     stack.defer(await registerDomains(context, hooks, config.data));

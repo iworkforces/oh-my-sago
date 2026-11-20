@@ -1,15 +1,18 @@
+import type { SessionMessageInfo } from "@opencode/client";
 import type { SessionContext } from "@opencode/plugin/promise/session";
 import type { z } from "zod";
-import { ContentKind } from "../enums.js";
-import { nativeAction } from "../domains/permissions.js";
+import { type NativePermission, nativeAction } from "../domains/permissions.js";
 import { legacyName } from "../domains/value.js";
-import { MessageRole } from "../enums.js";
+import { ContentKind, MessageRole, RecordType } from "../enums.js";
 import { type permission, promptBody } from "./requests.js";
+
+export const clientMetadata = "omsago.client";
 
 export const promptOverrides = promptBody
   .pick({
     system: true,
     tools: true,
+    variant: true,
     temperature: true,
     topP: true,
     topK: true,
@@ -20,7 +23,7 @@ export const promptOverrides = promptBody
   .strip();
 export type PromptOverrides = z.infer<typeof promptOverrides>;
 
-export function permissionRules(rules: readonly z.infer<typeof permission>[]) {
+export function permissionRules(rules: readonly z.infer<typeof permission>[]): NativePermission[] {
   return rules.map((rule) => ({
     action: nativeAction(rule.permission),
     resource: rule.pattern,
@@ -28,30 +31,70 @@ export function permissionRules(rules: readonly z.infer<typeof permission>[]) {
   }));
 }
 
-/** Parent session hooks apply this state after their own legacy transformations. */
+function storedOverrides(metadata: Readonly<Record<string, unknown>> | undefined) {
+  const stored = metadata?.[clientMetadata];
+  return stored === undefined ? undefined : promptOverrides.parse(stored);
+}
+
+/** The prompt overrides one primary request resolved; `undefined` when its user record had none. */
+export type Turn = { readonly overrides: PromptOverrides | undefined };
+
+/**
+ * Hands each primary request the prompt overrides stored on the latest user record that existed
+ * when its model was resolved. `experimental.model.resolve` records them and the same request's
+ * `context` hook takes them, so no turn outlives the request that read it. Parent session hooks
+ * apply them after their own legacy transformations.
+ */
 export class ClientSessionState {
-  readonly #pending = new Map<string, PromptOverrides>();
+  readonly #resolved = new Map<string, Turn>();
 
-  set(sessionID: string, overrides: PromptOverrides): void {
-    this.#pending.set(sessionID, overrides);
-  }
   delete(sessionID: string): void {
-    this.#pending.delete(sessionID);
+    this.#resolved.delete(sessionID);
   }
 
-  apply(event: SessionContext): void {
-    const stored = event.messages.findLast(
-      (message) =>
-        message.role === MessageRole.User && message.metadata?.["omsago.client"] !== undefined,
-    );
+  /** Reads the latest user record for a primary request and keeps its overrides for `take`. */
+  async variant(
+    sessionID: string,
+    records: () => Promise<readonly SessionMessageInfo[]>,
+  ): Promise<string | undefined> {
+    // A request whose resolution fails must not leave an earlier request's turn behind.
+    this.#resolved.delete(sessionID);
+    const latest = (await records()).findLast((record) => record.type === RecordType.User);
+    const turn = { overrides: storedOverrides(latest?.metadata) };
+    this.#resolved.set(sessionID, turn);
+    return turn.overrides?.variant;
+  }
+
+  /** Removes and returns the turn the session's latest primary resolution recorded. */
+  take(sessionID: string): Turn | undefined {
+    const turn = this.#resolved.get(sessionID);
+    this.#resolved.delete(sessionID);
+    return turn;
+  }
+
+  /**
+   * Applies `turn`, or without one the overrides on the request's latest user message, as for
+   * compaction and generate requests, which resolve no turn of their own.
+   */
+  apply(event: SessionContext, turn: Turn | undefined): void {
     const overrides =
-      stored === undefined
-        ? this.#pending.get(event.sessionID)
-        : promptOverrides.parse(stored.metadata?.["omsago.client"]);
+      turn === undefined
+        ? storedOverrides(
+            event.messages.findLast((message) => message.role === MessageRole.User)?.metadata,
+          )
+        : turn.overrides;
     if (overrides === undefined) return;
     if (overrides.system !== undefined)
       event.system.push({ type: ContentKind.Text, text: overrides.system });
-    const { system: _system, tools, options, params, maxOutputTokens, ...generation } = overrides;
+    const {
+      system: _system,
+      variant: _variant,
+      tools,
+      options,
+      params,
+      maxOutputTokens,
+      ...generation
+    } = overrides;
     Object.assign(event.options, options, params, generation);
     if (maxOutputTokens !== undefined) event.options.maxTokens = maxOutputTokens;
     for (const name of Object.keys(event.tools)) {

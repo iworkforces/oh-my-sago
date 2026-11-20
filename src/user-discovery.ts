@@ -1,9 +1,12 @@
+import type { Stats } from "node:fs";
 import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative, sep } from "node:path";
 import type { Config } from "@opencode-ai/sdk";
 import { Skill, type Plugin } from "@opencode/plugin";
+import type { Registration } from "@opencode/plugin/promise/registration";
 import { z } from "zod";
+import { errorMessage } from "./domains/value.js";
 
 const frontmatter = z.object({
   name: z.string().optional(),
@@ -14,29 +17,80 @@ const frontmatter = z.object({
   autoinvoke: z.boolean().optional(),
 });
 
+function skipUnreadable(path: string, error: unknown): void {
+  console.warn("omsago: Skipping unreadable path", {
+    path,
+    reason: errorMessage(error),
+  });
+}
+
+async function canonicalOf(path: string): Promise<string | undefined> {
+  try {
+    return await realpath(path);
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      "code" in error &&
+      (error.code === "ENOENT" || error.code === "ENOTDIR" || error.code === "ELOOP")
+    )
+      return undefined;
+    skipUnreadable(path, error);
+    return undefined;
+  }
+}
+
+function ancestry(path: string): string[] {
+  const parent = dirname(path);
+  return parent === path ? [path] : [path, ...ancestry(parent)];
+}
+
+// A link must never lead discovery into HOME, `/` or an ancestor of the root, however either side
+// is spelled. The root itself is left out: it is the one directory walked, and `visited` already
+// stops links back to it.
+async function protectedDirectories(root: string): Promise<Set<string>> {
+  const parents = [homedir(), dirname(root)];
+  const canonicalRoot = await canonicalOf(root);
+  if (canonicalRoot !== undefined) parents.push(dirname(canonicalRoot));
+  const protectedPaths = new Set<string>();
+  for (const path of parents.flatMap((parent) => ancestry(parent))) {
+    protectedPaths.add(path);
+    const canonical = await canonicalOf(path);
+    if (canonical === undefined) continue;
+    for (const resolved of ancestry(canonical)) protectedPaths.add(resolved);
+  }
+  return protectedPaths;
+}
+
 async function* markdownFiles(root: string) {
+  const blocked = await protectedDirectories(root);
   const pending = [root];
   const visited = new Set<string>();
   while (pending.length > 0) {
     const path = pending.pop();
     if (path === undefined) break;
-    let canonical: string;
-    try {
-      canonical = await realpath(path);
-    } catch (error) {
-      if (
-        error instanceof Error &&
-        "code" in error &&
-        (error.code === "ENOENT" || error.code === "ENOTDIR" || error.code === "ELOOP")
-      )
-        continue;
-      throw error;
+    const canonical = await canonicalOf(path);
+    if (canonical === undefined) continue;
+    if (blocked.has(canonical)) {
+      console.warn("omsago: Skipping protected directory", { path, canonical });
+      continue;
     }
     if (visited.has(canonical)) continue;
     visited.add(canonical);
-    const entry = await stat(canonical);
+    let entry: Stats;
+    try {
+      entry = await stat(canonical);
+    } catch (error) {
+      skipUnreadable(path, error);
+      continue;
+    }
     if (entry.isDirectory()) {
-      const names = (await readdir(path)).sort().reverse();
+      let names: string[];
+      try {
+        names = (await readdir(path)).sort().reverse();
+      } catch (error) {
+        skipUnreadable(path, error);
+        continue;
+      }
       for (const name of names) {
         if (!name.startsWith(".") && name !== "node_modules") pending.push(join(path, name));
       }
@@ -47,7 +101,13 @@ async function* markdownFiles(root: string) {
 }
 
 async function markdown(file: { readonly path: string; readonly canonical: string }) {
-  const text = await readFile(file.canonical, "utf8");
+  let text: string;
+  try {
+    text = await readFile(file.canonical, "utf8");
+  } catch (error) {
+    skipUnreadable(file.path, error);
+    return undefined;
+  }
   const header = /^\uFEFF?---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(text);
   try {
     const yaml = header?.[1];
@@ -62,8 +122,15 @@ async function markdown(file: { readonly path: string; readonly canonical: strin
   }
 }
 
-export async function registerUserDiscovery(context: Plugin.Context) {
-  const commands = new Map<string, NonNullable<Config["command"]>[string]>();
+type CommandDefinition = NonNullable<Config["command"]>[string];
+
+export interface UserDiscovery {
+  readonly commands: Record<string, CommandDefinition>;
+  readonly dispose: Registration["dispose"];
+}
+
+export async function registerUserDiscovery(context: Plugin.Context): Promise<UserDiscovery> {
+  const commands = new Map<string, CommandDefinition>();
   const skills = new Map<string, Skill.Info>();
   for (const directory of [".agents", ".opencode"]) {
     const root = join(homedir(), directory);

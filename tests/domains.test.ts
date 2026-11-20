@@ -9,6 +9,13 @@ test("native domains execute legacy tools, hooks, commands and permission rules"
     tools: "passed",
     permissions: "passed",
     commands: "passed",
+    rejectedCommands: "passed",
+    hookFailures: "passed",
+    metadataFallback: "passed",
+    globalPermissions: "passed",
+    isolatedAgents: "passed",
+    isolatedMcp: "passed",
+    isolatedTools: "passed",
     cleanup: "passed",
     runtime: cliVersion(),
   });

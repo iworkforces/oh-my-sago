@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
+import { type Json, json } from "../../src/domains/value.js";
 
 const require = createRequire(import.meta.url);
 
@@ -22,10 +23,18 @@ export function cliVersion(): string {
   return cliInstall().runtime;
 }
 
+export interface CliHost extends AsyncDisposable {
+  readonly runtime: string;
+  readonly url: string;
+  readonly locationFetch: typeof globalThis.fetch;
+  request(path: string, body?: Json): Promise<Json | undefined>;
+}
+
 export async function cliHost(
   directory: string,
   plugins: readonly string[] = [fileURLToPath(new URL("./domain-plugin/", import.meta.url))],
-) {
+  settings: Readonly<Record<string, Json>> = {},
+): Promise<CliHost> {
   const installed = cliInstall();
   const version = Bun.spawn([installed.executable, "--version"], {
     env: process.env,
@@ -39,6 +48,7 @@ export async function cliHost(
   await Bun.write(
     config,
     JSON.stringify({
+      ...settings,
       plugins,
       model: "omsago-test/scripted",
     }),
@@ -112,23 +122,30 @@ export async function cliHost(
       }
     }
     const base = address;
+    const authorization = `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`;
+    const scoped = (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const request = input instanceof Request ? input : new Request(input.toString(), init);
+      const url = new URL(request.url);
+      url.searchParams.set("location[directory]", directory);
+      const located = new Request(url.toString(), request);
+      located.headers.set("authorization", authorization);
+      return fetch(located);
+    };
     return {
       runtime,
-      async request(path: string, body?: unknown) {
+      url: base,
+      locationFetch: Object.assign(scoped, { preconnect: fetch.preconnect }),
+      async request(path: string, body?: Json): Promise<Json | undefined> {
         const url = new URL(path, base);
-        url.searchParams.set("location[directory]", directory);
-        const response = await fetch(url, {
+        const response = await scoped(url, {
           method: body === undefined ? "GET" : "POST",
-          headers: {
-            authorization: `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`,
-            "content-type": "application/json",
-          },
+          headers: { "content-type": "application/json" },
           ...(body === undefined ? {} : { body: JSON.stringify(body) }),
           signal: AbortSignal.timeout(60_000),
         });
         const text = await response.text();
         assert.ok(response.ok, `${response.status} ${url.pathname}: ${text}`);
-        return text ? JSON.parse(text) : undefined;
+        return text === "" ? undefined : json.parse(JSON.parse(text));
       },
       async [Symbol.asyncDispose]() {
         await stop();

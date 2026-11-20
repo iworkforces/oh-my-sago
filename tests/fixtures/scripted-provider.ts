@@ -15,6 +15,7 @@ export type Script = (
 ) => Promise<LanguageModelV3GenerateResult>;
 
 export const testModel = { providerID: "omsago-test", id: "scripted" } as const;
+export const variantHeader = "x-omsago-variant";
 
 export function answer(text: string): LanguageModelV3GenerateResult {
   return {
@@ -28,7 +29,19 @@ export function answer(text: string): LanguageModelV3GenerateResult {
   };
 }
 
-export function scriptedProvider(script: Script): Plugin.Plugin {
+export function aborted(signal: AbortSignal | undefined): Promise<never> {
+  return new Promise<never>((_resolve, reject) => {
+    signal?.addEventListener(
+      "abort",
+      () => {
+        reject(signal.reason instanceof Error ? signal.reason : new Error(String(signal.reason)));
+      },
+      { once: true },
+    );
+  });
+}
+
+export function scriptedProvider(script: Script, variants: readonly string[] = []): Plugin.Plugin {
   const providerID = Provider.ID.make(testModel.providerID);
   const modelID = Model.ID.make(testModel.id);
   const model: LanguageModelV3 = {
@@ -92,7 +105,16 @@ export function scriptedProvider(script: Script): Plugin.Plugin {
             activation: "enabled",
             package: "aisdk:omsago-test",
           },
-          models: [{ ...Model.Info.default(providerID, modelID), package: "aisdk:omsago-test" }],
+          models: [
+            {
+              ...Model.Info.default(providerID, modelID),
+              package: "aisdk:omsago-test",
+              variants: variants.map((id) => ({
+                id: Model.VariantID.make(id),
+                headers: { [variantHeader]: id },
+              })),
+            },
+          ],
         });
       });
       await context.aisdk.hook(
@@ -117,8 +139,10 @@ export function scriptedProvider(script: Script): Plugin.Plugin {
 }
 
 class UnsupportedScriptContent extends Error {
-  constructor(readonly contentType: string) {
+  readonly contentType: string;
+  constructor(contentType: string) {
     super(`The scripted test provider cannot stream ${contentType}.`);
     this.name = "UnsupportedScriptContent";
+    this.contentType = contentType;
   }
 }
