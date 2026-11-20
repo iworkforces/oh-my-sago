@@ -294,10 +294,7 @@ function answerTurn(
   return [...leading, ...moved, ...answers, ...rest];
 }
 
-function answerCalls(
-  messages: readonly RequestMessage[],
-  fallback: (call: ToolCallPart) => ToolResultPart,
-): RequestMessage[] {
+function splitTurns(messages: readonly RequestMessage[]): RequestMessage[][] {
   const turns: RequestMessage[][] = [];
   let turn: RequestMessage[] = [];
   for (const native of messages) {
@@ -308,7 +305,14 @@ function answerCalls(
     turn.push(native);
   }
   turns.push(turn);
-  return turns.flatMap((entries) => answerTurn(entries, fallback));
+  return turns;
+}
+
+function answerCalls(
+  messages: readonly RequestMessage[],
+  fallback: (call: ToolCallPart) => ToolResultPart,
+): RequestMessage[] {
+  return splitTurns(messages).flatMap((entries) => answerTurn(entries, fallback));
 }
 
 const reminderBlock = /<system-reminder>[\s\S]*?<\/system-reminder>/g;
