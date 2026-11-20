@@ -47,12 +47,23 @@ function legacyAgent(agent: AgentInfo): Agent & { hidden: boolean; variant?: str
   };
 }
 
+function releaseDate(model: ModelInfo): string {
+  const date = new Date(model.time.released);
+  if (!Number.isNaN(date.getTime())) return date.toISOString().slice(0, 10);
+  console.warn("omsago: Model has an invalid release date", {
+    providerID: model.providerID,
+    modelID: model.id,
+    released: model.time.released,
+  });
+  return "";
+}
+
 function providerModel(model: ModelInfo) {
   const cost = model.cost.find((tier) => tier.tier === undefined);
   return {
     id: model.id,
     name: model.name,
-    release_date: new Date(model.time.released).toISOString().slice(0, 10),
+    release_date: releaseDate(model),
     attachment: model.capabilities.input.some((input) => input !== "text"),
     reasoning: model.variants.length > 0,
     temperature: model.capabilities.temperature === true,
