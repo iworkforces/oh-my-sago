@@ -13,6 +13,7 @@ import {
   verifyTodoFailure,
 } from "./stability.js";
 import { systemPrefix, systemProbe } from "./system.js";
+import { toastProbe, toastPrompt } from "./toasts.js";
 import { verifyRestoredTodos, verifyTodos } from "./todos.js";
 import { verifyTurns } from "./turns.js";
 import { registerSessions } from "../../../src/session/index.js";
@@ -28,7 +29,8 @@ export default Plugin.define({
     if (providerCleanup) scope.defer(providerCleanup);
     const toasts = await context.rpc.register(toastRpc, {});
     scope.defer(toasts.dispose);
-    const bridge = createClientBridge(context, toasts.events);
+    const toastsProbe = toastProbe(toasts.events);
+    const bridge = createClientBridge(context, toastsProbe.emitter);
     scope.defer(bridge.close);
     scope.defer(
       (
@@ -50,6 +52,7 @@ export default Plugin.define({
           async "chat.message"(input, output) {
             for (const part of output.parts) {
               if (part.type !== PartKind.Text) continue;
+              if (part.text.includes(toastPrompt)) toastsProbe.request(bridge.input.client);
               if (part.text.includes("CLIENT_THINK"))
                 Object.assign(output.message, { variant: "high" });
               if (part.text.includes("CLIENT_UNKNOWN_MODEL")) {
@@ -90,6 +93,7 @@ export default Plugin.define({
             async execute(event) {
               const session = await context.session.get({ sessionID: event.sessionID });
               const result = await verifyClient({ context, bridge, session });
+              const toastSessions = await toastsProbe.verify(bridge.input.client);
               const turns = await verifyTurns(context, bridge, model);
               const stability = await verifyStability(context, bridge);
               const stop = await verifyStop(context, bridge);
@@ -97,6 +101,7 @@ export default Plugin.define({
               const locationScope = await verifyLocationScope(context, bridge);
               await report(event.sessionID, {
                 ...result,
+                toastSessions,
                 ...turns,
                 ...stability,
                 ...stop,

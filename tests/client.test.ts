@@ -21,6 +21,7 @@ test("the legacy client preserves discovery envelopes, session lifecycle, pagina
     compactionEvents: "passed",
     backgroundWait: "passed",
     toasts: "passed",
+    toastSessions: "passed",
     retry: "passed",
     variants: "passed",
     queuedOverrides: "passed",
