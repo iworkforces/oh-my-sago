@@ -82,6 +82,22 @@ for (const rule of [
     JSON.stringify({ rule, permissions: agent.permissions }),
   );
 
+// A legacy `tools` toggle set to false denies that tool; an enabled toggle adds no rule.
+assert.ok(
+  agent.permissions.some(
+    (rule) =>
+      rule.action === "fixture_hidden" &&
+      rule.resource === "*" &&
+      rule.effect === PermissionEffect.Deny,
+  ),
+  JSON.stringify(agent.permissions),
+);
+assert.equal(
+  agent.permissions.some((rule) => rule.action === "fixture_shown"),
+  false,
+  JSON.stringify(agent.permissions),
+);
+
 // Broken legacy overrides of native agents remove them instead of keeping their looser rules.
 const agentIds = new Set(inventory.map((item) => item.id));
 assert.ok(agentIds.has("bridge-seeded-control"), JSON.stringify(inventory));
@@ -299,6 +315,7 @@ console.log(
     hookFailures: "passed",
     metadataFallback: "passed",
     globalPermissions: "passed",
+    toolDenials: "passed",
     isolatedAgents: "passed",
     isolatedMcp: "passed",
     isolatedTools: "passed",

@@ -73,6 +73,9 @@ const hooks: Hooks = {
       },
     }),
   },
+  async config(input) {
+    input.tools = { fixture_hidden: false, fixture_shown: true };
+  },
   async "tool.definition"(event, output) {
     if (event.toolID === "question") {
       output.description = "reshaped before the hook failed";

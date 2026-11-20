@@ -13,6 +13,7 @@ test("native domains execute legacy tools, hooks, commands and permission rules"
     hookFailures: "passed",
     metadataFallback: "passed",
     globalPermissions: "passed",
+    toolDenials: "passed",
     isolatedAgents: "passed",
     isolatedMcp: "passed",
     isolatedTools: "passed",
