@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import type { SessionInfo } from "@opencode/client";
 import type { Plugin } from "@opencode/plugin";
+import { Location } from "@opencode/schema/location";
 import { z } from "zod";
 import { BridgeError } from "../../../src/client/errors.js";
 import { clientEvents } from "../../../src/client/events.js";
@@ -321,6 +323,64 @@ export async function verifyStability(
   assert.ok(delivered >= 4, `only ${delivered} native events reached the bridge`);
   assert.ok(fetched <= 2, `${fetched} snapshot fetches for ${delivered} native events`);
   return { startup: "passed", recovery: "passed", coalescing: "passed" };
+}
+
+/**
+ * OpenCode publishes every location's session events on one bus, so a bridge announces only its own
+ * location's sessions. The bridge here lives in another directory, where only a relocated sentinel
+ * session belongs; the bus delivers in order, so the sentinel's idle and deletion arrive after
+ * everything the foreign session did.
+ */
+export async function verifyLocationScope(
+  context: Plugin.Context,
+  bridge: Bridge,
+): Promise<"passed"> {
+  const elsewhere = Location.Info.fields.directory.make(`${context.location.directory}-elsewhere`);
+  const foreign = await createSession(bridge, "location scope foreign");
+  const sentinel = await createSession(bridge, "location scope sentinel");
+  const relocate = (session: SessionInfo): SessionInfo =>
+    session.id === sentinel ? { ...session, location: { directory: elsewhere } } : session;
+  const scoped: Plugin.Context = {
+    ...context,
+    location: new Location.Info({ directory: elsewhere, project: context.location.project }),
+    session: {
+      ...context.session,
+      async get(input, options) {
+        return relocate(await context.session.get(input, options));
+      },
+      async list(input, options) {
+        const page = await context.session.list(input, options);
+        return { ...page, data: page.data.map(relocate) };
+      },
+    },
+  };
+  const log = new EventLog();
+  const events = clientEvents(scoped, new SessionRetries(), new ClientSessionState());
+  await using cleanup = new AsyncDisposableStack();
+  cleanup.defer(() => events.stop());
+  const logged = await errorsDuring(async () => {
+    await events.start(log.sink);
+    await promptSession(bridge, foreign, "CLIENT_STABILITY");
+    await promptSession(bridge, sentinel, "CLIENT_STABILITY");
+    await log.until(idleOf(sentinel), "the sentinel's idle in its own location");
+    await context.session.remove({ sessionID: foreign });
+    await context.session.remove({ sessionID: sentinel });
+    await log.until(
+      (event) =>
+        event.type === LegacyEventType.SessionDeleted && event.properties.info.id === sentinel,
+      "the sentinel's deletion",
+    );
+  });
+  assert.deepEqual(
+    log.since(0, foreign).map((event) => event.type),
+    [],
+  );
+  const idles = log
+    .since(0, sentinel)
+    .filter((event) => event.type === LegacyEventType.SessionIdle);
+  assert.equal(idles.length, 1);
+  assert.deepEqual(logged, []);
+  return "passed";
 }
 
 const bridgeError =

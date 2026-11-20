@@ -111,6 +111,15 @@ export function clientEvents(
   const settled = new Map<string, number | undefined>();
   /** Idle times a resync announced; the stream's own settle event for that turn is then a duplicate. */
   const resynced = new Map<string, number>();
+  /**
+   * OpenCode starts one plugin instance, and so one OmO runtime, per location, but publishes every
+   * location's session events on one bus. A bridge announces only its own location's sessions, or
+   * each runtime would answer every turn: N idles, N todo-continuation countdowns and N prompts.
+   */
+  const owns = (session: SessionInfo): boolean =>
+    session.location.directory === context.location.directory;
+  /** Sessions of other locations, whose events need no snapshot unless a move brings them here. */
+  const foreign = new Set<string>();
   let running: Promise<void> | undefined;
   let stopping: Promise<void> | undefined;
   const forget = (sessionID: string): void => {
@@ -118,8 +127,14 @@ export function clientEvents(
     messages.delete(sessionID);
     settled.delete(sessionID);
     resynced.delete(sessionID);
+    foreign.delete(sessionID);
     retries.clear(sessionID);
     state.delete(sessionID);
+  };
+  /** Stops serving a session that belongs to another location, forgetting it if it moved away. */
+  const disown = (sessionID: string): void => {
+    if (sessions.has(sessionID)) forget(sessionID);
+    foreign.add(sessionID);
   };
   const halt = async (): Promise<void> => {
     controller.abort();
@@ -189,8 +204,8 @@ export function clientEvents(
       const deleted = async (sessionID: string): Promise<void> => {
         const session = sessions.get(sessionID);
         forget(sessionID);
-        if (session === undefined)
-          throw new BridgeError(500, `Deleted session ${sessionID} has no observed snapshot`);
+        // Only another location's sessions go unobserved, and their deletion is not ours to announce.
+        if (session === undefined) return;
         await emit({
           type: LegacyEventType.SessionDeleted,
           properties: { info: legacySession(session) },
@@ -232,15 +247,23 @@ export function clientEvents(
         await Promise.all(
           Array.from(groups, async ([sessionID, group]) => {
             if (group.some((event) => event.type === SessionEventType.Deleted)) return;
+            if (
+              foreign.has(sessionID) &&
+              !group.some((event) => event.type === SessionEventType.Moved)
+            )
+              return;
             const settling = group.some((event) => settles.has(event.type));
             if (settling) retries.clear(sessionID);
             try {
-              const [session, records] = await raceAbort(
+              const session = await raceAbort(signal, context.session.get({ sessionID }, options));
+              if (!owns(session)) {
+                disown(sessionID);
+                return;
+              }
+              foreign.delete(sessionID);
+              const records = await raceAbort(
                 signal,
-                Promise.all([
-                  context.session.get({ sessionID }, options),
-                  context.session.context({ sessionID }, options),
-                ]),
+                context.session.context({ sessionID }, options),
               );
               sessions.set(sessionID, session);
               snapshots.set(sessionID, { session, records, diffed: false });
@@ -439,20 +462,23 @@ export function clientEvents(
           signal,
           listSessions(context, new Request("http://omsago.invalid/session", { signal })),
         );
+        const fresh = new Map<string, SessionInfo>();
+        for (const session of listed) {
+          if (owns(session)) fresh.set(session.id, session);
+          else disown(session.id);
+        }
         if (!announce) {
-          for (const session of listed) {
+          for (const session of fresh.values()) {
             sessions.set(session.id, session);
             settled.set(session.id, session.time.idle);
           }
           return;
         }
-        const fresh = new Map(listed.map((session) => [session.id, session]));
         for (const sessionID of [...sessions.keys()].filter((id) => !fresh.has(id))) {
           try {
-            fresh.set(
-              sessionID,
-              await raceAbort(signal, context.session.get({ sessionID }, options)),
-            );
+            const session = await raceAbort(signal, context.session.get({ sessionID }, options));
+            if (owns(session)) fresh.set(sessionID, session);
+            else disown(sessionID);
           } catch (error) {
             if (!(error instanceof Error && error.name === ErrorName.SessionNotFound)) throw error;
             await deleted(sessionID);
