@@ -2,8 +2,8 @@ import type { AgentConfig, Config } from "@opencode-ai/sdk";
 import { Agent, Model, type Plugin } from "@opencode/plugin";
 import type { Registration } from "@opencode/plugin/promise/registration";
 import { z } from "zod";
-import { AgentMode, PermissionEffect } from "../enums.js";
-import { type NativePermission, nativePermissions } from "./permissions.js";
+import { AgentMode, PermissionEffect, permissionEffects } from "../enums.js";
+import { type NativePermission, nativeAction, nativePermissions } from "./permissions.js";
 import { errorMessage, jsonRecord } from "./value.js";
 
 /** Every legacy agent field the update applies, including the extras the SDK type omits. */
@@ -29,6 +29,47 @@ interface AgentOverride {
   readonly settings: z.infer<typeof agentSettings>;
   readonly model: Agent.Info["model"];
   readonly permissions: readonly NativePermission[];
+}
+
+const effect = z.enum(permissionEffects);
+
+/**
+ * Parses the top-level rules one entry at a time, so one bad rule cannot fail setup. Skipping it
+ * would widen every agent, so an invalid effect denies its action and resource, and an entry of
+ * the wrong shape denies its action for every resource.
+ */
+function globalPermissions(value: unknown): NativePermission[] {
+  if (value === undefined) return [];
+  const entries: [string, unknown][] =
+    typeof value === "object" && value !== null && !Array.isArray(value)
+      ? Object.entries(value)
+      : [["*", value]];
+  const denied = (action: string, resource: string, rule: unknown): NativePermission => {
+    console.warn("omsago: Denying an invalid permission rule", {
+      permission: action,
+      resource,
+      rule: JSON.stringify(rule) ?? String(rule),
+    });
+    return { action: nativeAction(action), resource, effect: PermissionEffect.Deny };
+  };
+  return entries.flatMap(([action, rule]): NativePermission[] => {
+    if (typeof rule === "string") {
+      const parsed = effect.safeParse(rule);
+      return [
+        parsed.success
+          ? { action: nativeAction(action), resource: "*", effect: parsed.data }
+          : denied(action, "*", rule),
+      ];
+    }
+    if (typeof rule !== "object" || rule === null || Array.isArray(rule))
+      return [denied(action, "*", rule)];
+    return Object.entries(rule).map(([resource, decision]) => {
+      const parsed = effect.safeParse(decision);
+      return parsed.success
+        ? { action: nativeAction(action), resource, effect: parsed.data }
+        : denied(action, resource, decision);
+    });
+  });
 }
 
 function prepareAgent(
@@ -69,8 +110,14 @@ export async function registerAgents(
   context: Plugin.Context,
   config: Config,
 ): Promise<Registration> {
-  const selection = z.object({ default_agent: z.string().optional() }).parse(config);
-  const global = nativePermissions(config.permission);
+  const selection = z.object({ default_agent: z.string().optional() }).safeParse(config);
+  const requested = selection.success ? selection.data.default_agent : undefined;
+  if (!selection.success)
+    console.warn("omsago: Ignoring a default_agent that is not an agent name", {
+      reason: selection.error.message,
+    });
+  let defaultAgent = requested;
+  const global = globalPermissions(config.permission);
   const removals: string[] = [];
   const overrides: AgentOverride[] = [];
   for (const [name, definition] of Object.entries(config.agent ?? {})) {
@@ -82,7 +129,7 @@ export async function registerAgents(
     try {
       overrides.push(prepareAgent(name, definition, global));
     } catch (error) {
-      if (name === selection.default_agent) throw error;
+      if (name === defaultAgent) defaultAgent = undefined;
       // Keeping a native agent that the config meant to restrict would widen its access.
       console.warn("omsago: Removing agent with an invalid definition", {
         agent: name,
@@ -113,6 +160,14 @@ export async function registerAgents(
         agent.permissions.push(...permissions);
       });
     }
-    if (selection.default_agent !== undefined) editor.default(selection.default_agent);
+    if (defaultAgent === undefined || editor.get(defaultAgent) === undefined) {
+      if (requested !== undefined)
+        console.warn("omsago: Keeping the native default agent", {
+          default_agent: requested,
+          reason: "it names no agent with a valid definition",
+        });
+      return;
+    }
+    editor.default(defaultAgent);
   });
 }
