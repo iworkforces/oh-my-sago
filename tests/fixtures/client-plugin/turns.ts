@@ -3,6 +3,7 @@ import type { OpenCodeEvent } from "@opencode/client";
 import type { Plugin } from "@opencode/plugin";
 import type { LegacyEvent } from "../../../src/client/events.js";
 import { createClientBridge } from "../../../src/client/index.js";
+import { clientMetadata } from "../../../src/client/state.js";
 import {
   CompactionStatus,
   ContentKind,
@@ -28,7 +29,10 @@ type Scenario =
   | "compaction"
   | "compactionCorrelation"
   | "retry"
-  | "variants";
+  | "variants"
+  | "queuedOverrides"
+  | "overridesAfterFailure"
+  | "rejectedSwitch";
 
 /**
  * Relays a subscription, slipping in a `session.compaction.ended` that no compaction of ours
@@ -362,6 +366,124 @@ export async function verifyTurns(
       .length,
     1,
   );
+
+  /** Each `CLIENT_OVERRIDE <name>` request since `from`, by the name its latest prompt carries. */
+  const overridden = (from: number) =>
+    model.overrides.slice(from).map(({ prompt: latest, variant, systems }) => ({
+      prompt: /CLIENT_OVERRIDE (\w+)/.exec(latest)?.[1],
+      variant,
+      systems,
+    }));
+  const text = (value: string) => [{ type: ContentKind.Text, text: value }];
+
+  // A prompt queued before a steered one keeps its own overrides once the steered turn ran.
+  const steering = await create();
+  const steeringRequests = model.overrides.length;
+  const hold = model.hold();
+  const steered = log.mark();
+  const first = await client.session.promptAsync({
+    path: { id: steering.id },
+    body: { system: "override-first", parts: text("CLIENT_OVERRIDE first CLIENT_HOLD") },
+  });
+  assert.equal(first.response.status, 204);
+  await hold.entered;
+  const admit = (value: string, delivery: "queue" | "steer", stored: Record<string, string>) =>
+    context.session.prompt({
+      sessionID: steering.id,
+      text: value,
+      delivery,
+      resume: true,
+      metadata: { [clientMetadata]: stored },
+    });
+  await admit("CLIENT_OVERRIDE queued", "queue", { system: "override-queued" });
+  await admit("CLIENT_OVERRIDE steered", "steer", { system: "override-steered", variant: "high" });
+  hold.release();
+  await log.until(idleOf(steering.id), "idle after steered and queued prompts", steered);
+  assert.deepEqual(overridden(steeringRequests), [
+    { prompt: "first", variant: undefined, systems: ["override-first"] },
+    { prompt: "steered", variant: "high", systems: ["override-steered"] },
+    { prompt: "queued", variant: undefined, systems: ["override-queued"] },
+  ]);
+
+  // A failed or interrupted turn leaves nothing behind for the prompt that follows it.
+  const recovering = await create();
+  const recoveringRequests = model.overrides.length;
+  const turn = async (body: PromptBody & { readonly variant?: string }, label: string) => {
+    const mark = log.mark();
+    await client.session.prompt({ path: { id: recovering.id }, body });
+    await log.until(idleOf(recovering.id), label, mark);
+  };
+  await turn(
+    {
+      variant: "high",
+      system: "override-failed",
+      parts: text("CLIENT_OVERRIDE failed CLIENT_FAIL_ONCE"),
+    },
+    "idle after a failed override turn",
+  );
+  await turn(
+    { system: "override-recovered", parts: text("CLIENT_OVERRIDE recovered") },
+    "idle after the turn that followed a failure",
+  );
+  const held: PromptBody & { readonly variant?: string } = {
+    variant: "high",
+    system: "override-interrupted",
+    parts: text("CLIENT_OVERRIDE interrupted CLIENT_HOLD"),
+  };
+  const interrupting = model.hold();
+  const aborting = log.mark();
+  const pending = await client.session.promptAsync({ path: { id: recovering.id }, body: held });
+  assert.equal(pending.response.status, 204);
+  await interrupting.entered;
+  assert.equal((await client.session.abort({ path: { id: recovering.id } })).data, true);
+  await log.until(idleOf(recovering.id), "idle after an interrupted override turn", aborting);
+  await turn({ parts: text("CLIENT_OVERRIDE resumed") }, "idle after an interrupted turn");
+  assert.deepEqual(overridden(recoveringRequests), [
+    { prompt: "failed", variant: "high", systems: ["override-failed"] },
+    { prompt: "recovered", variant: undefined, systems: ["override-recovered"] },
+    { prompt: "interrupted", variant: "high", systems: ["override-interrupted"] },
+    { prompt: "resumed", variant: undefined, systems: [] },
+  ]);
+
+  // A rejected agent or model leaves the session's selection, permissions and records unchanged.
+  const guarded = await create();
+  const snapshot = async () => {
+    const [info, recorded] = await Promise.all([
+      context.session.get({ sessionID: guarded.id }),
+      context.session.context({ sessionID: guarded.id }),
+    ]);
+    return {
+      agent: info.agent,
+      model: info.model,
+      permissions: info.permissions,
+      records: recorded.length,
+    };
+  };
+  const original = await snapshot();
+  const location = { directory: context.location.directory };
+  const otherAgent = (await context.agent.list({ location })).data.find(
+    (agent) => agent.id !== original.agent,
+  )?.id;
+  assert.ok(otherAgent !== undefined, "the fixture host offers a second agent");
+  const missingModel = { providerID: "omsago-test", modelID: "missing" };
+  const rejectedBodies: PromptBody[] = [
+    { agent: "fixture-missing-agent", tools: { read: false }, parts: text("CLIENT_READ") },
+    { agent: otherAgent, model: missingModel, tools: { read: false }, parts: text("CLIENT_READ") },
+  ];
+  for (const body of rejectedBodies) {
+    const refused = await client.session.prompt({ path: { id: guarded.id }, body });
+    assert.equal(refused.response.status, 404, JSON.stringify(refused.error));
+  }
+  const unsummarized = await client.session.summarize({
+    path: { id: guarded.id },
+    body: missingModel,
+  });
+  assert.equal(unsummarized.response.status, 404, JSON.stringify(unsummarized.error));
+  await assert.rejects(
+    context.session.prompt({ sessionID: guarded.id, text: "CLIENT_UNKNOWN_MODEL", resume: true }),
+    /Unknown model omsago-test\/missing/,
+  );
+  assert.deepEqual(await snapshot(), original);
   return {
     turns: "passed",
     errors: "passed",
@@ -372,5 +494,8 @@ export async function verifyTurns(
     compactionCorrelation: "passed",
     retry: "passed",
     variants: "passed",
+    queuedOverrides: "passed",
+    overridesAfterFailure: "passed",
+    rejectedSwitch: "passed",
   } as const;
 }

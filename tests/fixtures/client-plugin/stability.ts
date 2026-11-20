@@ -4,7 +4,9 @@ import { z } from "zod";
 import { BridgeError } from "../../../src/client/errors.js";
 import { clientEvents } from "../../../src/client/events.js";
 import { createClientBridge } from "../../../src/client/index.js";
-import { SessionRetries } from "../../../src/client/sessions.js";
+import { type RetryStatus, SessionRetries } from "../../../src/client/sessions.js";
+import { sessionRoutes } from "../../../src/client/session-routes.js";
+import { ClientSessionState } from "../../../src/client/state.js";
 import {
   ContentKind,
   LegacyEventType,
@@ -13,11 +15,32 @@ import {
   SessionStatusKind,
 } from "../../../src/enums.js";
 import { EventLog, idleOf } from "./events.js";
+import type { ClientModel } from "./model.js";
 import { settledOrder } from "./turns.js";
 
 type Bridge = ReturnType<typeof createClientBridge>;
 type Outcome = { readonly done: true; readonly value: undefined };
 const sessionData = z.object({ sessionID: z.string() });
+const pendingRetry: RetryStatus = {
+  type: SessionStatusKind.Retry,
+  attempt: 1,
+  message: "fixture retry",
+  next: 1,
+};
+
+/** Gives a session an entry in both per-session stores a deletion must clear. */
+async function remember(
+  state: ClientSessionState,
+  retries: SessionRetries,
+  sessionID: string,
+): Promise<void> {
+  await state.variant(sessionID, () => Promise.resolve([]));
+  retries.set(sessionID, pendingRetry);
+}
+
+function forgotten(state: ClientSessionState, retries: SessionRetries, sessionID: string): boolean {
+  return state.take(sessionID) === undefined && !retries.clear(sessionID);
+}
 
 /** A native event stream the fixture can end, fail or hold down, counting what it delivers. */
 class FlakyStream {
@@ -158,7 +181,7 @@ export async function verifyTodoFailure(
     },
   };
   const { log, held } = holdingLog();
-  const events = clientEvents(failing, new SessionRetries());
+  const events = clientEvents(failing, new SessionRetries(), new ClientSessionState());
   await using cleanup = new AsyncDisposableStack();
   cleanup.defer(() => events.stop());
   await events.start(log.sink);
@@ -202,7 +225,9 @@ export async function verifyStability(
     },
   };
   const { log, held } = holdingLog();
-  const events = clientEvents(flaky, new SessionRetries());
+  const retries = new SessionRetries();
+  const state = new ClientSessionState();
+  const events = clientEvents(flaky, retries, state);
   await using cleanup = new AsyncDisposableStack();
   cleanup.defer(() => events.stop());
 
@@ -231,6 +256,7 @@ export async function verifyStability(
   await stream.reopened();
   await live(ended, "idle after the stream ended and resubscribed");
 
+  await remember(state, retries, doomed);
   const gap = log.mark();
   stream.down = true;
   stream.fail(new Error("fixture event stream failure"));
@@ -245,6 +271,7 @@ export async function verifyStability(
     "deletion of a session removed while the stream was down",
     gap,
   );
+  assert.ok(forgotten(state, retries, doomed), "a resync kept a deleted session's state");
   const caught = log.since(gap, missed);
   const types = settledOrder(caught);
   assert.ok(
@@ -318,7 +345,9 @@ export async function verifyStop(
   });
   const entered = Promise.withResolvers<void>();
   let handled = 0;
-  const stalled = clientEvents(context, new SessionRetries(), { stopMs: 50 });
+  const stalled = clientEvents(context, new SessionRetries(), new ClientSessionState(), {
+    stopMs: 50,
+  });
   cleanup.defer(() => stalled.stop());
   await stalled.start({
     async event() {
@@ -357,7 +386,9 @@ export async function verifyStop(
       },
     },
   };
-  const seedless = clientEvents(unlisted, new SessionRetries(), { startMs: 50 });
+  const seedless = clientEvents(unlisted, new SessionRetries(), new ClientSessionState(), {
+    startMs: 50,
+  });
   cleanup.defer(() => seedless.stop());
   await assert.rejects(seedless.start(new EventLog().sink), bridgeError(504));
   assert.equal(listed?.aborted, true);
@@ -366,7 +397,9 @@ export async function verifyStop(
   const stream = new FlakyStream(context);
   const flaky: Plugin.Context = { ...context, event: { subscribe: stream.subscribe } };
   const { log, held } = holdingLog();
-  const delivering = clientEvents(flaky, new SessionRetries(), { stopMs: 60_000 });
+  const delivering = clientEvents(flaky, new SessionRetries(), new ClientSessionState(), {
+    stopMs: 60_000,
+  });
   cleanup.defer(() => delivering.stop());
   cleanup.defer(() => {
     held.release.resolve();
@@ -409,4 +442,92 @@ export async function verifyStop(
     stoppedDelivery: "passed",
     closedTransport: "passed",
   };
+}
+
+/**
+ * Deleting a session by a native event or the legacy route clears its per-session state, and a
+ * stopped bridge reports no retry that no event will ever clear.
+ */
+export async function verifyLifecycle(
+  context: Plugin.Context,
+  bridge: Bridge,
+  model: ClientModel,
+): Promise<Readonly<Record<"deletedByEvent" | "deletedByRoute" | "retryAfterStop", "passed">>> {
+  await using cleanup = new AsyncDisposableStack();
+
+  const retries = new SessionRetries();
+  const state = new ClientSessionState();
+  const events = clientEvents(context, retries, state);
+  cleanup.defer(() => events.stop());
+  const log = new EventLog();
+  await events.start(log.sink);
+  const removed = await createSession(bridge, "deleted by event");
+  await log.until(
+    (event) =>
+      event.type === LegacyEventType.SessionCreated && event.properties.info.id === removed,
+    "the creation of a session deleted by event",
+  );
+  await remember(state, retries, removed);
+  await context.session.remove({ sessionID: removed });
+  await log.until(
+    (event) =>
+      event.type === LegacyEventType.SessionDeleted && event.properties.info.id === removed,
+    "the deletion event",
+  );
+  assert.ok(forgotten(state, retries, removed), "a session.deleted event kept session state");
+
+  const routeRetries = new SessionRetries();
+  const routeState = new ClientSessionState();
+  const routes = sessionRoutes(context, routeState, routeRetries);
+  const routed = await createSession(bridge, "deleted by route");
+  await remember(routeState, routeRetries, routed);
+  const response = await routes(
+    new Request(`http://omsago.invalid/session/${routed}`, { method: "DELETE" }),
+    ["session", routed],
+  );
+  assert.equal(await response.json(), true);
+  assert.ok(forgotten(routeState, routeRetries, routed), "DELETE /session/:id kept session state");
+  const deleted = await createSession(bridge, "deleted through the bridge");
+  await bridge.sessionState.variant(deleted, () => Promise.resolve([]));
+  assert.equal((await bridge.input.client.session.delete({ path: { id: deleted } })).data, true);
+  assert.equal(bridge.sessionState.take(deleted), undefined);
+
+  const stopping = createClientBridge(context, { emit: () => Promise.resolve() });
+  cleanup.defer(() => stopping.close());
+  const stoppingLog = new EventLog();
+  await stopping.start(stoppingLog.sink);
+  const stalled = await createSession(stopping, "retry after stop");
+  model.stallRetries(stalled);
+  const status = async () => (await stopping.input.client.session.status()).data?.[stalled];
+  const scheduled = stoppingLog.mark();
+  const queued = await stopping.input.client.session.promptAsync({
+    path: { id: stalled },
+    body: { parts: [{ type: ContentKind.Text, text: "CLIENT_STALLED_RETRY" }] },
+  });
+  assert.equal(queued.response.status, 204);
+  await stoppingLog.until(
+    (event) =>
+      event.type === LegacyEventType.SessionStatus &&
+      event.properties.sessionID === stalled &&
+      event.properties.status.type === SessionStatusKind.Retry,
+    "a stalled provider retry",
+    scheduled,
+  );
+  assert.equal((await status())?.type, SessionStatusKind.Retry);
+  await stopping.stop();
+  assert.deepEqual(await status(), { type: SessionStatusKind.Busy });
+  assert.equal((await context.session.interrupt({ sessionID: stalled })).interrupted, true);
+  await context.session.wait({ sessionID: stalled });
+  assert.deepEqual(await status(), { type: SessionStatusKind.Idle });
+  const idle = new SessionRetries();
+  idle.set(stalled, pendingRetry);
+  assert.deepEqual(idle.status(await context.session.get({ sessionID: stalled })), {
+    type: SessionStatusKind.Idle,
+  });
+  await stopping.close();
+  assert.equal(
+    (await bridge.input.client.session.status()).data?.[stalled]?.type,
+    SessionStatusKind.Idle,
+  );
+  return { deletedByEvent: "passed", deletedByRoute: "passed", retryAfterStop: "passed" };
 }

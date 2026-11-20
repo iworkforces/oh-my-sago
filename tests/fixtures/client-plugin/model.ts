@@ -15,11 +15,32 @@ export interface VariantRequest {
   readonly system: boolean;
 }
 
+/** A `CLIENT_OVERRIDE` request: its latest user text and the `override-*` system markers it carried. */
+export interface OverrideRequest {
+  readonly prompt: string;
+  readonly variant: string | undefined;
+  readonly systems: readonly string[];
+}
+
+export interface Hold {
+  /** Settles once the next request whose latest user text has `CLIENT_HOLD` is blocked. */
+  readonly entered: Promise<void>;
+  /** Lets the blocked request answer; an abort fails it instead. */
+  release(): void;
+}
+
 export interface ClientModel {
   readonly script: Script;
   /** Settles once the next `CLIENT_CANCEL` request is blocked waiting for its abort signal. */
   blocked(): Promise<void>;
+  /** Blocks the next `CLIENT_HOLD` request until released or aborted. */
+  hold(): Hold;
+  /** The retry delay the fixture's retry hook schedules for a session. */
+  retryDelay(sessionID: string): number;
+  /** Makes the session's provider retries wait long enough to stay pending until interrupted. */
+  stallRetries(sessionID: string): void;
   readonly variants: readonly VariantRequest[];
+  readonly overrides: readonly OverrideRequest[];
 }
 
 function toolCall(name: string, input: unknown): Awaited<ReturnType<Script>> {
@@ -40,15 +61,22 @@ function toolCall(name: string, input: unknown): Awaited<ReturnType<Script>> {
 export function clientModel(): ClientModel {
   const waiting: PromiseWithResolvers<void>[] = [];
   const variants: VariantRequest[] = [];
+  const overrides: OverrideRequest[] = [];
+  const stalled = new Set<string>();
+  let pendingHold: { readonly entered: () => void; readonly release: Promise<void> } | undefined;
   let retries = 0;
   const script: Script = async (request) => {
-    const text = request.prompt
-      .flatMap((message) =>
-        message.role === MessageRole.User
-          ? message.content.flatMap((part) => (part.type === ContentKind.Text ? [part.text] : []))
-          : [],
-      )
-      .join("\n");
+    const texts = request.prompt.flatMap((message) =>
+      message.role === MessageRole.User
+        ? [
+            message.content
+              .flatMap((part) => (part.type === ContentKind.Text ? [part.text] : []))
+              .join("\n"),
+          ]
+        : [],
+    );
+    const text = texts.join("\n");
+    const latest = texts.at(-1) ?? "";
     if (
       request.prompt.some(
         (message) =>
@@ -71,6 +99,25 @@ export function clientModel(): ClientModel {
             message.role === MessageRole.System && message.content.includes("variant-system"),
         ),
       });
+    if (text.includes("CLIENT_OVERRIDE"))
+      overrides.push({
+        prompt: latest,
+        variant: request.headers?.[variantHeader],
+        systems: request.prompt.flatMap((message) =>
+          message.role === MessageRole.System ? (message.content.match(/override-\w+/g) ?? []) : [],
+        ),
+      });
+    if (latest.includes("CLIENT_HOLD") && pendingHold !== undefined) {
+      const hold = pendingHold;
+      pendingHold = undefined;
+      const signal = request.abortSignal;
+      signal?.throwIfAborted();
+      const interrupted = aborted(signal);
+      hold.entered();
+      await Promise.race([hold.release, interrupted]);
+    }
+    if (latest.includes("CLIENT_FAIL_ONCE")) throw new ScriptFailure(false);
+    if (text.includes("CLIENT_STALLED_RETRY")) throw new ScriptFailure(true);
     if (text.includes("CLIENT_RETRY") && retries++ === 0) throw new ScriptFailure(true);
     if (text.includes("CLIENT_TODO") && !answered) {
       assert.ok(request.tools?.some((tool) => tool.name === NativeTool.TodoWrite) === true);
@@ -117,7 +164,18 @@ export function clientModel(): ClientModel {
       waiting.push(waiter);
       return waiter.promise;
     },
+    hold() {
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      pendingHold = { entered: entered.resolve, release: release.promise };
+      return { entered: entered.promise, release: release.resolve };
+    },
+    retryDelay: (sessionID) => (stalled.has(sessionID) ? 600_000 : 10),
+    stallRetries(sessionID) {
+      stalled.add(sessionID);
+    },
     variants,
+    overrides,
   };
 }
 

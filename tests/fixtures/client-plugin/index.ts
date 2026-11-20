@@ -5,7 +5,7 @@ import { toastRpc } from "../../../src/toast.js";
 import { scriptedProvider } from "../scripted-provider.js";
 import { verifyClient } from "./contracts.js";
 import { clientModel, clientVariants } from "./model.js";
-import { verifyStability, verifyStop, verifyTodoFailure } from "./stability.js";
+import { verifyLifecycle, verifyStability, verifyStop, verifyTodoFailure } from "./stability.js";
 import { systemPrefix, systemProbe } from "./system.js";
 import { verifyRestoredTodos, verifyTodos } from "./todos.js";
 import { verifyTurns } from "./turns.js";
@@ -27,7 +27,8 @@ export default Plugin.define({
     scope.defer(
       (
         await context.session.hook("retry", (event) => {
-          if (event.decision.retry) event.decision = { retry: true, delay: 10 };
+          if (event.decision.retry)
+            event.decision = { retry: true, delay: model.retryDelay(event.sessionID) };
         })
       ).dispose,
     );
@@ -40,11 +41,18 @@ export default Plugin.define({
       await registerSessions(
         context,
         {
-          async "chat.message"(_input, output) {
+          async "chat.message"(input, output) {
             for (const part of output.parts) {
               if (part.type !== PartKind.Text) continue;
               if (part.text.includes("CLIENT_THINK"))
                 Object.assign(output.message, { variant: "high" });
+              if (part.text.includes("CLIENT_UNKNOWN_MODEL")) {
+                const location = { directory: context.location.directory };
+                const agents = (await context.agent.list({ location })).data;
+                const other = agents.find((agent) => agent.id !== input.agent);
+                if (other !== undefined) output.message.agent = other.id;
+                output.message.model = { providerID: "omsago-test", modelID: "missing" };
+              }
               part.text += " chat hook";
             }
           },
@@ -79,11 +87,13 @@ export default Plugin.define({
               const turns = await verifyTurns(context, bridge, model);
               const stability = await verifyStability(context, bridge);
               const stop = await verifyStop(context, bridge);
+              const lifecycle = await verifyLifecycle(context, bridge, model);
               await report(event.sessionID, {
                 ...result,
                 ...turns,
                 ...stability,
                 ...stop,
+                ...lifecycle,
                 systemMetadata: probe.verify(),
               });
             },

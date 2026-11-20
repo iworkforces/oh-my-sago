@@ -19,6 +19,9 @@ test("the legacy client preserves discovery envelopes, session lifecycle, pagina
     toasts: "passed",
     retry: "passed",
     variants: "passed",
+    queuedOverrides: "passed",
+    overridesAfterFailure: "passed",
+    rejectedSwitch: "passed",
     startup: "passed",
     recovery: "passed",
     coalescing: "passed",
@@ -26,6 +29,9 @@ test("the legacy client preserves discovery envelopes, session lifecycle, pagina
     stalledSeed: "passed",
     stoppedDelivery: "passed",
     closedTransport: "passed",
+    deletedByEvent: "passed",
+    deletedByRoute: "passed",
+    retryAfterStop: "passed",
     systemMetadata: "passed",
   });
 }, 90_000);
