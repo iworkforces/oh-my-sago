@@ -91,6 +91,7 @@ export async function registerMcp(context: Plugin.Context, config: Config): Prom
     }
   }
   const unresolved = new Set<string>();
+  const shadowed = new Set<string>();
   return context.mcp.transform((editor) => {
     for (const server of servers) {
       if ("toggle" in server) {
@@ -107,7 +108,14 @@ export async function registerMcp(context: Plugin.Context, config: Config): Prom
         editor.update(server.name, (entry) => {
           entry.disabled = !server.toggle;
         });
-      } else editor.set(server.name, server.definition);
+      } else if (editor.get(server.name) === undefined) editor.set(server.name, server.definition);
+      else if (!shadowed.has(server.name)) {
+        // The user's own configuration registers first, and its definition outranks OmO's.
+        shadowed.add(server.name);
+        console.warn("omsago: Keeping the configured MCP server over OmO's definition", {
+          server: server.name,
+        });
+      }
     }
   });
 }
