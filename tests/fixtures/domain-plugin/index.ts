@@ -21,6 +21,9 @@ const seededAgents = {
   disabled: "bridge-seeded-disabled",
 } as const;
 const configuredServer = "bridge-configured";
+/** Probe modes whose permission request reached the legacy `permission.ask` hook. */
+const probed = new Set<string>();
+const probeArgs = z.object({ mode: z.string() });
 
 const hooks: Hooks = {
   tool: {
@@ -36,6 +39,30 @@ const hooks: Hooks = {
         });
         context.metadata({ title: "echo progress", metadata: { seen: true } });
         return { title: "echo result", output: input.message, metadata: { owner: "legacy" } };
+      },
+    }),
+    bridge_probe: tool({
+      description: "Report how a probe mode came through the bridge's hooks.",
+      args: { mode: tool.schema.string() },
+      async execute(input, context) {
+        const cycle: Record<string, unknown> = { kept: "yes" };
+        cycle["self"] = cycle;
+        const unrepresentable = input.mode === "cyclic" ? { cycle, big: 1n } : {};
+        await context.ask({
+          permission: "bridge_probe",
+          patterns: [input.mode],
+          always: [],
+          metadata: { ...unrepresentable, phase: "ask" },
+        });
+        context.metadata({
+          title: "probe progress",
+          metadata: { ...unrepresentable, phase: "progress" },
+        });
+        return {
+          title: "probe result",
+          output: `probe ${input.mode}${probed.has(input.mode) ? " asked" : ""}`,
+          metadata: { ...unrepresentable, owner: "probe" },
+        };
       },
     }),
     bridge_unrepresentable: tool({
@@ -60,6 +87,25 @@ const hooks: Hooks = {
   },
   async "tool.execute.after"(event, output) {
     if (event.tool === "bridge_echo") output.output += " after";
+    if (event.tool === "bridge_probe" && probeArgs.parse(event.args).mode === "throw-after") {
+      output.output += " mutated";
+      output.metadata = { mutated: true };
+      throw new Error("fixture after hook failure");
+    }
+  },
+  async "permission.ask"(input, output) {
+    if (input.type !== "bridge_probe") return;
+    const [mode = ""] = [input.pattern ?? []].flat();
+    probed.add(mode);
+    if (mode === "throw-permission") {
+      output.status = PermissionEffect.Deny;
+      throw new Error("fixture permission hook failure");
+    }
+    if (mode === "invalid-status") Object.assign(output, { status: "sometimes" });
+  },
+  async "shell.env"(_input, output) {
+    output.env["OMSAGO_FIXTURE_ENV"] = "partial";
+    throw new Error("fixture shell.env failure");
   },
   async "command.execute.before"(_event, output) {
     for (const part of output.parts) if (part.type === PartKind.Text) part.text += " command hook";
@@ -74,9 +120,34 @@ function asked(request: Parameters<Script>[0], text: string): boolean {
   );
 }
 
+function probeMode(request: Parameters<Script>[0]): string | undefined {
+  for (const message of request.prompt)
+    if (message.role === MessageRole.User)
+      for (const part of message.content) {
+        const mode =
+          part.type === ContentKind.Text ? /Probe ([\w-]+)\./.exec(part.text)?.[1] : undefined;
+        if (mode !== undefined) return mode;
+      }
+  return undefined;
+}
+
 let calls = 0;
 const provider = scriptedProvider(async (request) => {
   if (request.prompt.some((message) => message.role === MessageRole.Tool)) return answer("done");
+  const mode = probeMode(request);
+  if (mode !== undefined)
+    return {
+      ...answer(""),
+      content: [
+        {
+          type: ContentKind.ToolCall,
+          toolCallId: `probe-${mode}`,
+          toolName: "bridge_probe",
+          input: JSON.stringify({ mode }),
+        },
+      ],
+      finishReason: { unified: "tool-calls", raw: "tool_calls" },
+    };
   if (asked(request, "List the tools."))
     return answer(
       `TOOLS ${JSON.stringify(
@@ -159,6 +230,14 @@ export default Plugin.define({
     );
     // The SDK types cannot express malformed legacy entries, so the config skips type checking.
     const config = z.custom<Config>().parse({
+      // Invalid global rules deny what they name; a default naming a removed agent is skipped.
+      permission: {
+        bridge_valid: PermissionEffect.Allow,
+        bridge_global: "sometimes",
+        bridge_shape: 42,
+        bridge_mixed: { "allowed/*": PermissionEffect.Allow, "odd/*": "maybe" },
+      },
+      default_agent: seededAgents.permission,
       agent: {
         "bridge-fixture": {
           prompt: "Fixture instructions",
@@ -176,7 +255,21 @@ export default Plugin.define({
           permission: { edit: "sometimes" },
         },
       },
-      command: { "bridge-command": { template: "Argument: $ARGUMENTS" } },
+      command: {
+        "bridge-command": { template: "Argument: $ARGUMENTS" },
+        // Each switches to a valid agent first, which a rejected model must not leave behind.
+        "bridge-unlisted-model": {
+          template: "Unlisted: $ARGUMENTS",
+          agent: "bridge-fixture",
+          model: "omsago-test/missing",
+        },
+        "bridge-invalid-model": {
+          template: "Invalid: $ARGUMENTS",
+          agent: "bridge-fixture",
+          model: "not-a-model",
+        },
+        "bridge-missing-agent": { template: "Missing: $ARGUMENTS", agent: "bridge-missing" },
+      },
       mcp: {
         "bridge-valid": { type: McpServerType.Local, command: ["false"], enabled: false },
         [configuredServer]: { enabled: false, unexpected: true },

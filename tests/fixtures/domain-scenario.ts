@@ -18,7 +18,9 @@ const agents = z.object({
     z.object({
       id: z.string(),
       system: z.string().optional(),
-      permissions: z.array(z.object({ action: z.string(), effect: z.string() })),
+      permissions: z.array(
+        z.object({ action: z.string(), resource: z.string().optional(), effect: z.string() }),
+      ),
     }),
   ),
 });
@@ -62,6 +64,24 @@ assert.ok(
   ),
 );
 
+// Invalid global rules deny what they name instead of failing setup or widening access.
+for (const rule of [
+  { action: "bridge_valid", resource: "*", effect: PermissionEffect.Allow },
+  { action: "bridge_global", resource: "*", effect: PermissionEffect.Deny },
+  { action: "bridge_shape", resource: "*", effect: PermissionEffect.Deny },
+  { action: "bridge_mixed", resource: "allowed/*", effect: PermissionEffect.Allow },
+  { action: "bridge_mixed", resource: "odd/*", effect: PermissionEffect.Deny },
+])
+  assert.ok(
+    agent.permissions.some(
+      (entry) =>
+        entry.action === rule.action &&
+        entry.resource === rule.resource &&
+        entry.effect === rule.effect,
+    ),
+    JSON.stringify({ rule, permissions: agent.permissions }),
+  );
+
 // Broken legacy overrides of native agents remove them instead of keeping their looser rules.
 const agentIds = new Set(inventory.map((item) => item.id));
 assert.ok(agentIds.has("bridge-seeded-control"), JSON.stringify(inventory));
@@ -80,13 +100,13 @@ assert.equal(serverStatus["bridge-configured"], "disabled", JSON.stringify(serve
 for (const name of ["bridge-extra-key", "bridge-unsupported", "bridge-no-definition"])
   assert.equal(serverStatus[name], undefined, JSON.stringify(servers));
 
-async function session(effect: PermissionEffect) {
+async function session(effect: PermissionEffect, action = "bridge_echo") {
   return sessionInfo.parse(
     await host.request("/api/session", {
       location: { directory },
       model: { providerID: "omsago-test", id: "scripted" },
       agent: "bridge-fixture",
-      permissions: [{ action: "bridge_echo", resource: "*", effect }],
+      permissions: [{ action, resource: "*", effect }],
     }),
   ).data;
 }
@@ -113,6 +133,53 @@ assert.ok(
     (part) => part.type === PartKind.Tool && part.state?.status === ToolStateStatus.Error,
   ),
 );
+
+// A failing or invalid legacy hook keeps the native outcome, and unrepresentable metadata degrades.
+async function probe(mode: string) {
+  const probing = await session(PermissionEffect.Allow, "bridge_probe");
+  await host.request(`/api/session/${probing.id}/prompt`, { text: `Probe ${mode}.` });
+  await host.request(`/api/session/${probing.id}/command`, { name: "fixture-wait", text: "" });
+  const part = records
+    .parse(await host.request(`/api/session/${probing.id}/context`))
+    .data.flatMap((record) => (record.type === RecordType.Assistant ? (record.content ?? []) : []))
+    .find((entry) => entry.type === PartKind.Tool);
+  assert.equal(part?.state?.status, ToolStateStatus.Completed, JSON.stringify(part));
+  return part.state;
+}
+for (const mode of ["throw-permission", "invalid-status"]) {
+  const state = await probe(mode);
+  assert.deepEqual(state.content, [{ type: PartKind.Text, text: `probe ${mode} asked` }]);
+}
+const unchanged = await probe("throw-after");
+assert.deepEqual(unchanged.content, [{ type: PartKind.Text, text: "probe throw-after asked" }]);
+assert.equal(unchanged.metadata?.["owner"], "probe");
+assert.equal(unchanged.metadata?.["mutated"], undefined);
+const degraded = await probe("cyclic");
+assert.deepEqual(degraded.content, [{ type: PartKind.Text, text: "probe cyclic asked" }]);
+assert.equal(degraded.metadata?.["owner"], "probe");
+assert.equal(degraded.metadata?.["title"], "probe result");
+assert.equal(degraded.metadata?.["cycle"], undefined);
+assert.equal(degraded.metadata?.["big"], undefined);
+
+const shelled = await session(PermissionEffect.Allow);
+await host.request(`/api/session/${shelled.id}/shell`, {
+  command: 'printf %s "${OMSAGO_FIXTURE_ENV:-native}"',
+});
+await host.request(`/api/session/${shelled.id}/command`, { name: "fixture-wait", text: "" });
+const shell = z
+  .object({
+    data: z.array(
+      z.object({
+        type: z.string(),
+        status: z.string().optional(),
+        output: z.object({ output: z.string() }).optional(),
+      }),
+    ),
+  })
+  .parse(await host.request(`/api/session/${shelled.id}/context`))
+  .data.find((record) => record.type === RecordType.Shell);
+assert.equal(shell?.status, "exited", JSON.stringify(shell));
+assert.equal(shell.output?.output, "native");
 
 const listing = await session(PermissionEffect.Allow);
 await host.request(`/api/session/${listing.id}/prompt`, { text: "List the tools." });
@@ -191,6 +258,33 @@ assert.ok(
       message.type === RecordType.User && message.text === "Argument: example command hook",
   ),
 );
+
+// A command whose agent or model is rejected changes nothing and sends no prompt.
+const selection = z.object({
+  data: z.object({ agent: z.string().optional(), model: z.json().optional() }),
+});
+const guarded = sessionInfo.parse(
+  await host.request("/api/session", {
+    location: { directory },
+    model: { providerID: "omsago-test", id: "scripted" },
+  }),
+).data;
+const snapshot = async () => ({
+  selection: selection.parse(await host.request(`/api/session/${guarded.id}`)).data,
+  records: records.parse(await host.request(`/api/session/${guarded.id}/context`)).data.length,
+});
+const before = await snapshot();
+for (const [name, reason] of [
+  ["bridge-unlisted-model", /Unknown model omsago-test\/missing/],
+  ["bridge-invalid-model", /model not-a-model/],
+  ["bridge-missing-agent", /Unknown agent bridge-missing/],
+] as const)
+  await assert.rejects(
+    host.request(`/api/session/${guarded.id}/command`, { name, text: "example" }),
+    reason,
+  );
+assert.deepEqual(await snapshot(), before);
+
 await host.request(`/api/session/${command.id}/command`, { name: "fixture-dispose", text: "" });
 assert.equal(
   agents.parse(await host.request("/api/agent")).data.some((item) => item.id === "bridge-fixture"),
@@ -201,6 +295,10 @@ console.log(
     tools: "passed",
     permissions: "passed",
     commands: "passed",
+    rejectedCommands: "passed",
+    hookFailures: "passed",
+    metadataFallback: "passed",
+    globalPermissions: "passed",
     isolatedAgents: "passed",
     isolatedMcp: "passed",
     isolatedTools: "passed",
