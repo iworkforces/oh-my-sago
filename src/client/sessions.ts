@@ -3,14 +3,14 @@ import type { SessionInfo } from "@opencode/client";
 import type { Session, SessionStatus } from "@opencode-ai/sdk";
 import { SessionStatusKind } from "../enums.js";
 
-export function legacySession(session: SessionInfo): Session {
+export function legacySession(session: SessionInfo, version: string): Session {
   return {
     id: session.id,
     projectID: session.projectID,
     directory: session.location.directory,
     ...(session.parentID === undefined ? {} : { parentID: session.parentID }),
     title: session.title ?? "",
-    version: "2.3.0",
+    version,
     time: { created: session.time.created, updated: session.time.updated },
   };
 }
