@@ -25,6 +25,33 @@ export function metadata(value: object | undefined): JsonRecord {
   return jsonRecord.parse(JSON.parse(JSON.stringify(value ?? {})));
 }
 
+/**
+ * Converts like `metadata`, but a top-level value JSON cannot hold, such as a cycle or a BigInt,
+ * costs only its own key: the other keys and the title survive, and a warning names the drop.
+ */
+export function degradedMetadata(value: object | undefined, source: string): JsonRecord {
+  try {
+    return metadata(value);
+  } catch (error) {
+    const kept: JsonRecord = {};
+    const dropped: string[] = [];
+    const entries: Record<string, unknown> = { ...value };
+    for (const [key, entry] of Object.entries(entries)) {
+      try {
+        Object.assign(kept, metadata({ [key]: entry }));
+      } catch {
+        dropped.push(key);
+      }
+    }
+    console.warn("omsago: Dropping metadata JSON cannot hold", {
+      source,
+      keys: dropped,
+      reason: errorMessage(error),
+    });
+    return kept;
+  }
+}
+
 export function inputSchema(value: Info["input"]): JsonRecord {
   if (value instanceof z.ZodType) return jsonRecord.parse(z.toJSONSchema(value));
   if (Schema.isSchema(value)) {

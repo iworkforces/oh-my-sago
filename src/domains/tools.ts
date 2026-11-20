@@ -5,6 +5,7 @@ import { z } from "zod";
 import {
   type Json,
   type JsonRecord,
+  degradedMetadata,
   errorMessage,
   inputSchema,
   legacyArguments,
@@ -66,7 +67,11 @@ export async function prepareTools(
           worktree: context.location.project.directory,
           abort: call.signal,
           metadata(update) {
-            progress.push(call.progress(metadata({ ...update.metadata, title: update.title })));
+            progress.push(
+              call.progress(
+                degradedMetadata({ ...update.metadata, title: update.title }, `${name} progress`),
+              ),
+            );
           },
           async ask(request) {
             await context.permission.assert({
@@ -75,7 +80,7 @@ export async function prepareTools(
               action: nativeAction(request.permission),
               resources: request.patterns,
               save: request.always,
-              metadata: metadata(request.metadata),
+              metadata: degradedMetadata(request.metadata, `${name} permission request`),
               source: { type: "tool", messageID: call.messageID, id: call.id },
             });
           },
@@ -95,7 +100,10 @@ export async function prepareTools(
               ...(file.filename === undefined ? {} : { name: file.filename }),
             })),
           ],
-          metadata: metadata({ ...resultMetadata, ...result.metadata, title: result.title }),
+          metadata: degradedMetadata(
+            { ...resultMetadata, ...result.metadata, title: result.title },
+            `${name} result`,
+          ),
         };
       },
     });
@@ -161,45 +169,56 @@ export async function registerTools(
     event.input = nativeArguments(name, output.args);
   });
   scope.defer(before.dispose);
+  // The tool already ran: a failing after-hook keeps its result instead of failing the call, and a
+  // typed tool error would read as a declined call that interrupts the turn.
   const after = await context.tool.hook("execute.after", async (event) => {
     if (event.status === ToolStateStatus.Error) return;
-    const content = event.result.content;
-    const text =
-      typeof content === "string"
-        ? content
-        : (content ?? [])
-            .flatMap((part) => (part.type === ToolContentKind.Text ? [part.text] : []))
-            .join("\n");
-    const output = {
-      title:
-        typeof event.result.metadata?.["title"] === "string" ? event.result.metadata["title"] : "",
-      output: text,
-      metadata: { ...event.result.metadata },
-    };
-    await hooks["tool.execute.after"]?.(
-      {
-        tool: legacyName(event.tool),
-        sessionID: event.sessionID,
-        callID: event.id,
-        args: legacyArguments(event.tool, event.input),
-      },
-      output,
-    );
-    const changedContent =
-      output.output === text
-        ? content
-        : [
-            { type: ToolContentKind.Text, text: output.output },
-            ...(typeof content === "string"
-              ? []
-              : (content ?? []).filter((part) => part.type !== ToolContentKind.Text)),
-          ];
-    event.result = {
-      ...event.result,
-      ...(typeof event.result.output === "string" ? { output: output.output } : {}),
-      ...(changedContent === undefined ? {} : { content: changedContent }),
-      metadata: metadata({ ...output.metadata, title: output.title }),
-    };
+    try {
+      const content = event.result.content;
+      const text =
+        typeof content === "string"
+          ? content
+          : (content ?? [])
+              .flatMap((part) => (part.type === ToolContentKind.Text ? [part.text] : []))
+              .join("\n");
+      const output = {
+        title:
+          typeof event.result.metadata?.["title"] === "string"
+            ? event.result.metadata["title"]
+            : "",
+        output: text,
+        metadata: structuredClone(event.result.metadata ?? {}),
+      };
+      await hooks["tool.execute.after"]?.(
+        {
+          tool: legacyName(event.tool),
+          sessionID: event.sessionID,
+          callID: event.id,
+          args: legacyArguments(event.tool, event.input),
+        },
+        output,
+      );
+      const changedContent =
+        output.output === text
+          ? content
+          : [
+              { type: ToolContentKind.Text, text: output.output },
+              ...(typeof content === "string"
+                ? []
+                : (content ?? []).filter((part) => part.type !== ToolContentKind.Text)),
+            ];
+      event.result = {
+        ...event.result,
+        ...(typeof event.result.output === "string" ? { output: output.output } : {}),
+        ...(changedContent === undefined ? {} : { content: changedContent }),
+        metadata: metadata({ ...output.metadata, title: output.title }),
+      };
+    } catch (error) {
+      console.warn("omsago: Keeping the tool result after tool.execute.after failed", {
+        tool: event.tool,
+        reason: errorMessage(error),
+      });
+    }
   });
   scope.defer(after.dispose);
   const owned = scope.move();
