@@ -476,6 +476,50 @@ test("the model gets OmO notices without markers or a reminder repeated within t
   expect(messages[3]).toBe(repeated);
 });
 
+test("the model gets an OmO notice it read in an earlier turn again only when OmO asks with it alone", () => {
+  const next = "<system-reminder>\n[BACKGROUND TASK ERROR]\n</system-reminder>";
+  const metadata = { [markerMetadata]: [initiator, noReply] };
+  const notice = { id: "notice", role: MessageRole.User, metadata, content: [textPart(done)] };
+  const read = { id: "read", role: MessageRole.Assistant, content: [textPart("noted")] };
+  const merged = {
+    id: "merged",
+    role: MessageRole.User,
+    metadata,
+    content: [textPart(`${done}\n\n${next}`)],
+  };
+  const woken = { id: "woken", role: MessageRole.User, content: [textPart("<subagent />")] };
+  const idle = { id: "idle", role: MessageRole.Assistant, content: [textPart("waiting")] };
+  const asked = { id: "asked", role: MessageRole.User, metadata, content: [textPart(done)] };
+  const answered = { id: "answered", role: MessageRole.Assistant, content: [textPart("again")] };
+  const quoted = {
+    id: "quoted",
+    role: MessageRole.User,
+    content: [textPart(`Why twice?\n${done}`)],
+  };
+  const messages = cleanInternalPrompts([
+    notice,
+    read,
+    merged,
+    woken,
+    idle,
+    asked,
+    answered,
+    quoted,
+  ]);
+  expect(messages).toEqual([
+    notice,
+    read,
+    { ...merged, content: [textPart(next)] },
+    woken,
+    idle,
+    asked,
+    answered,
+    quoted,
+  ]);
+  expect(messages[5]).toBe(asked);
+  expect(messages[7]).toBe(quoted);
+});
+
 test("OmO reads back the markers a stored prompt was saved without", async () => {
   const hidden = hideMarkers(`${done}\n${initiator}\n\n${noReply}`);
   expect(hidden).toEqual({ text: done, markers: [initiator, noReply] });
