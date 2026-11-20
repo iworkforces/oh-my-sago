@@ -52,12 +52,18 @@ export async function listSessions(
   request: Request,
 ): Promise<SessionInfo[]> {
   const directory = new URL(request.url).searchParams.get("directory") ?? undefined;
-  const sessions: SessionInfo[] = [];
+  const sessions = new Map<string, SessionInfo>();
+  const requested = new Set<string>();
   let cursor: string | undefined;
   do {
+    if (cursor !== undefined) requested.add(cursor);
     const page = await context.session.list({ directory, cursor }, { signal: request.signal });
-    sessions.push(...page.data);
+    for (const session of page.data) sessions.set(session.id, session);
     cursor = page.cursor.next ?? undefined;
+    if (cursor !== undefined && requested.has(cursor)) {
+      console.warn("omsago: Session pagination repeated a cursor", { cursor });
+      break;
+    }
   } while (cursor !== undefined);
-  return sessions;
+  return [...sessions.values()];
 }
