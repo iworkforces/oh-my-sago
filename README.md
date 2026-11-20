@@ -55,6 +55,12 @@ with OpenCode v2; the bridge does not implement another authentication system.
   publishes every directory's session events on one bus. Each instance translates
   only its own directory's sessions, so one finished turn produces one
   `session.idle` and at most one todo-continuation countdown and prompt.
+- An OpenCode v2 session can go idle while work it owns still runs, such as a
+  background shell or a Code Mode script that outlived its call, and that
+  work's notice wakes the session again. omsago holds back `session.idle` and
+  keeps reporting the session busy until it goes idle with none of its own work
+  left. Otherwise OmO would complete a background task early, then abort and
+  delete its session while the subagent was still working.
 - Native compaction start and failure reach OmO as
   `session.compaction.started` and `session.compaction.failed`. OmO's model
   fallback uses them to hold its timeout and error handling while a compaction
