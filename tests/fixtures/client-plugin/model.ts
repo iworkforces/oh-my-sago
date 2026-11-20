@@ -4,6 +4,8 @@ import { ContentKind, MessageRole, NativeTool, TodoStatus } from "../../../src/e
 import { aborted, answer, type Script, variantHeader } from "../scripted-provider.js";
 
 export const clientVariants = ["low", "high"] as const;
+/** The file, relative to the location, whose creation ends the `CLIENT_BACKGROUND` shell. */
+export const backgroundRelease = "client-background.release";
 export const fixtureTodos = [
   { content: "plan the refactor", status: TodoStatus.InProgress },
   { content: "ship the refactor", status: TodoStatus.Pending },
@@ -125,6 +127,14 @@ export function clientModel(): ClientModel {
         todos: text.includes("CLIENT_TODO_INVALID")
           ? [{ content: "invalid", status: "unknown" }]
           : fixtureTodos,
+      });
+    }
+    if (text.includes("CLIENT_BACKGROUND") && !answered) {
+      const shell = request.tools?.find((tool) => tool.name === "shell");
+      assert.ok(shell);
+      return toolCall(shell.name, {
+        command: `until [ -e ${backgroundRelease} ]; do sleep 0.05; done`,
+        background: true,
       });
     }
     if (text.includes("CLIENT_FAILURE")) throw new ScriptFailure(false);
