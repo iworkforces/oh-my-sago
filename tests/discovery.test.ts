@@ -14,6 +14,10 @@ test("user-root commands and skills are native and retain existing definitions o
     skills: "passed",
     skillLoading: "passed",
     precedence: "passed",
+    protectedLinks: "passed",
+    dotfilesLinks: "passed",
+    rootSymlink: "passed",
+    largeTree: "passed",
     unreadable: process.getuid?.() === 0 ? "skipped" : "passed",
   });
 }, 110_000);

@@ -24,23 +24,54 @@ function skipUnreadable(path: string, error: unknown): void {
   });
 }
 
+async function canonicalOf(path: string): Promise<string | undefined> {
+  try {
+    return await realpath(path);
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      "code" in error &&
+      (error.code === "ENOENT" || error.code === "ENOTDIR" || error.code === "ELOOP")
+    )
+      return undefined;
+    skipUnreadable(path, error);
+    return undefined;
+  }
+}
+
+function ancestry(path: string): string[] {
+  const parent = dirname(path);
+  return parent === path ? [path] : [path, ...ancestry(parent)];
+}
+
+// A link must never lead discovery into HOME, `/` or an ancestor of the root, however either side
+// is spelled. The root itself is left out: it is the one directory walked, and `visited` already
+// stops links back to it.
+async function protectedDirectories(root: string): Promise<Set<string>> {
+  const parents = [homedir(), dirname(root)];
+  const canonicalRoot = await canonicalOf(root);
+  if (canonicalRoot !== undefined) parents.push(dirname(canonicalRoot));
+  const protectedPaths = new Set<string>();
+  for (const path of parents.flatMap((parent) => ancestry(parent))) {
+    protectedPaths.add(path);
+    const canonical = await canonicalOf(path);
+    if (canonical === undefined) continue;
+    for (const resolved of ancestry(canonical)) protectedPaths.add(resolved);
+  }
+  return protectedPaths;
+}
+
 async function* markdownFiles(root: string) {
+  const blocked = await protectedDirectories(root);
   const pending = [root];
   const visited = new Set<string>();
   while (pending.length > 0) {
     const path = pending.pop();
     if (path === undefined) break;
-    let canonical: string;
-    try {
-      canonical = await realpath(path);
-    } catch (error) {
-      if (
-        error instanceof Error &&
-        "code" in error &&
-        (error.code === "ENOENT" || error.code === "ENOTDIR" || error.code === "ELOOP")
-      )
-        continue;
-      skipUnreadable(path, error);
+    const canonical = await canonicalOf(path);
+    if (canonical === undefined) continue;
+    if (blocked.has(canonical)) {
+      console.warn("omsago: Skipping protected directory", { path, canonical });
       continue;
     }
     if (visited.has(canonical)) continue;

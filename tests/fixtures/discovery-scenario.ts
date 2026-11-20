@@ -70,6 +70,11 @@ async function markdown(path: string, text: string) {
 // A root user can read files with mode 000, so the unreadable-entry checks only run unprivileged.
 const unprivileged = process.getuid?.() !== 0;
 await using restore = new AsyncDisposableStack();
+// The `.agents` commands root is itself a link into a dotfiles tree, as a stow or chezmoi layout has.
+const dotfiles = join(homedir(), "dotfiles");
+await mkdir(join(dotfiles, "agents-commands"), { recursive: true });
+await mkdir(join(homedir(), ".agents"), { recursive: true });
+await symlink(join(dotfiles, "agents-commands"), join(homedir(), ".agents", "commands"));
 const homes = [".agents", ".opencode"];
 for (const [index, root] of homes.entries()) {
   await markdown(
@@ -132,6 +137,40 @@ await symlink(
 );
 await symlink(join(directory, "absent"), join(homedir(), ".opencode", "skills", "broken"));
 await symlink("self", join(homedir(), ".opencode", "skills", "self"));
+// Links that would walk HOME, `/` or an ancestor of the discovery root, each with a marker that
+// only such a walk could find. They sit under `.opencode` because OpenCode itself also scans
+// `.agents/skills` and would surface the markers through its own walk.
+const scenarioRoot = dirname(homedir());
+await markdown(
+  join(homedir(), "elsewhere", "SKILL.md"),
+  "---\nname: discovery-home-marker\n---\nHome marker instructions.",
+);
+await markdown(
+  join(scenarioRoot, "ancestor-marker", "SKILL.md"),
+  "---\nname: discovery-ancestor-marker\n---\nAncestor marker instructions.",
+);
+await symlink(homedir(), join(homedir(), ".opencode", "skills", "home-link"));
+await symlink("/", join(homedir(), ".opencode", "skills", "root-link"));
+await symlink(scenarioRoot, join(homedir(), ".opencode", "skills", "ancestor-link"));
+await symlink(homedir(), join(homedir(), ".opencode", "commands", "home-link"));
+await symlink(scenarioRoot, join(homedir(), ".opencode", "commands", "ancestor-link"));
+// A skill linked per entry to a sibling dotfiles directory, and a large tree that is no ancestor.
+await markdown(
+  join(dotfiles, "skills", "dotted", "SKILL.md"),
+  "---\nname: discovery-dotfiles\ndescription: linked per entry\n---\nDotfiles instructions.",
+);
+await symlink(join(dotfiles, "skills", "dotted"), join(homedir(), ".opencode", "skills", "dotted"));
+const large = join(dotfiles, "large");
+await Promise.all(
+  Array.from({ length: 100 }, (_, index) =>
+    markdown(join(large, `group-${index}`, "notes.md"), "Not a skill."),
+  ),
+);
+await markdown(
+  join(large, "group-99", "deep", "tree", "SKILL.md"),
+  "---\nname: discovery-large\n---\nLarge tree instructions.",
+);
+await symlink(large, join(homedir(), ".opencode", "skills", "large"));
 await markdown(join(directory, "commands", "project-wins.md"), "project argument=$ARGUMENTS");
 await markdown(
   join(directory, "skills", "project", "SKILL.md"),
@@ -148,6 +187,7 @@ await host.request("/api/model");
 const inventory = commandsSchema.parse(await host.request("/api/command")).data;
 assert.ok(inventory.every((command) => command.name !== "invalid-metadata"));
 assert.ok(inventory.every((command) => command.name !== "unreadable-command"));
+assert.ok(inventory.every((command) => !/^(home|ancestor)-link\//.test(command.name)));
 console.error(
   JSON.stringify({
     commands: inventory.filter((command) =>
@@ -167,6 +207,11 @@ assert.ok(
     (skill) => skill.name !== "discovery-unreadable" && skill.name !== "discovery-locked",
   ),
 );
+assert.ok(
+  skills.every(
+    (skill) => skill.name !== "discovery-home-marker" && skill.name !== "discovery-ancestor-marker",
+  ),
+);
 console.error(
   JSON.stringify({ skills: skills.filter((skill) => skill.name.startsWith("discovery-")) }),
 );
@@ -175,6 +220,8 @@ for (const name of [
   "discovery-skill-1",
   "discovery-nested",
   "discovery-symlink",
+  "discovery-dotfiles",
+  "discovery-large",
 ])
   assert.ok(
     skills.some((skill) => skill.name === name),
@@ -247,6 +294,10 @@ console.log(
     skills: "passed",
     skillLoading: "passed",
     precedence: "passed",
+    protectedLinks: "passed",
+    dotfilesLinks: "passed",
+    rootSymlink: "passed",
+    largeTree: "passed",
     unreadable: unprivileged ? "passed" : "skipped",
   }),
 );
