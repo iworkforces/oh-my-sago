@@ -15,6 +15,7 @@ import {
 } from "./value.js";
 import { nativeAction } from "./permissions.js";
 import { ToolContentKind, ToolStateStatus } from "../enums.js";
+import { forSession } from "../client/toast-session.js";
 
 type ToolArgs = NonNullable<Hooks["tool"]>[string]["args"];
 
@@ -59,32 +60,34 @@ export async function prepareTools(
         call.signal.throwIfAborted();
         const progress: Promise<void>[] = [];
         const args = schema.parse(input);
-        const result = await definition.execute(args, {
-          sessionID: call.sessionID,
-          messageID: call.messageID,
-          agent: call.agent,
-          directory: context.location.directory,
-          worktree: context.location.project.directory,
-          abort: call.signal,
-          metadata(update) {
-            progress.push(
-              call.progress(
-                degradedMetadata({ ...update.metadata, title: update.title }, `${name} progress`),
-              ),
-            );
-          },
-          async ask(request) {
-            await context.permission.assert({
-              sessionID: call.sessionID,
-              agent: call.agent,
-              action: nativeAction(request.permission),
-              resources: request.patterns,
-              save: request.always,
-              metadata: degradedMetadata(request.metadata, `${name} permission request`),
-              source: { type: "tool", messageID: call.messageID, id: call.id },
-            });
-          },
-        });
+        const result = await forSession(call.sessionID, () =>
+          definition.execute(args, {
+            sessionID: call.sessionID,
+            messageID: call.messageID,
+            agent: call.agent,
+            directory: context.location.directory,
+            worktree: context.location.project.directory,
+            abort: call.signal,
+            metadata(update) {
+              progress.push(
+                call.progress(
+                  degradedMetadata({ ...update.metadata, title: update.title }, `${name} progress`),
+                ),
+              );
+            },
+            async ask(request) {
+              await context.permission.assert({
+                sessionID: call.sessionID,
+                agent: call.agent,
+                action: nativeAction(request.permission),
+                resources: request.patterns,
+                save: request.always,
+                metadata: degradedMetadata(request.metadata, `${name} permission request`),
+                source: { type: "tool", messageID: call.messageID, id: call.id },
+              });
+            },
+          }),
+        );
         await Promise.all(progress);
         const resultMetadata = name === "skill" ? metadata({ name: args["name"] }) : {};
         if (typeof result === "string")
@@ -162,10 +165,12 @@ export async function registerTools(
   const before = await context.tool.hook("execute.before", async (event) => {
     const name = event.tool;
     const output = { args: legacyArguments(name, event.input) };
-    await hooks["tool.execute.before"]?.(
-      { tool: legacyName(name), sessionID: event.sessionID, callID: event.id },
-      output,
-    );
+    await forSession(event.sessionID, async () => {
+      await hooks["tool.execute.before"]?.(
+        { tool: legacyName(name), sessionID: event.sessionID, callID: event.id },
+        output,
+      );
+    });
     event.input = nativeArguments(name, output.args);
   });
   scope.defer(before.dispose);
@@ -189,15 +194,17 @@ export async function registerTools(
         output: text,
         metadata: structuredClone(event.result.metadata ?? {}),
       };
-      await hooks["tool.execute.after"]?.(
-        {
-          tool: legacyName(event.tool),
-          sessionID: event.sessionID,
-          callID: event.id,
-          args: legacyArguments(event.tool, event.input),
-        },
-        output,
-      );
+      await forSession(event.sessionID, async () => {
+        await hooks["tool.execute.after"]?.(
+          {
+            tool: legacyName(event.tool),
+            sessionID: event.sessionID,
+            callID: event.id,
+            args: legacyArguments(event.tool, event.input),
+          },
+          output,
+        );
+      });
       const changedContent =
         output.output === text
           ? content

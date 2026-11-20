@@ -3,6 +3,7 @@ import type { Config } from "@opencode-ai/sdk";
 import type { Plugin } from "@opencode/plugin";
 import { z } from "zod";
 import { permissionEffects } from "../enums.js";
+import { forSession } from "../client/toast-session.js";
 import { registerAgents } from "./agents.js";
 import { registerCommands } from "./commands.js";
 import { registerMcp } from "./mcp.js";
@@ -65,19 +66,21 @@ export async function registerDomains(
         const ask = hooks["permission.ask"];
         if (ask === undefined) return;
         const asked = await contained("permission.ask", () =>
-          ask(
-            {
-              id: event.source?.id ?? crypto.randomUUID(),
-              type: legacyName(event.action),
-              sessionID: event.sessionID,
-              messageID: event.source?.messageID ?? "",
-              ...(event.source === undefined ? {} : { callID: event.source.id }),
-              pattern: [...event.resources],
-              title: event.action,
-              metadata: event.metadata ?? {},
-              time: { created: Date.now() },
-            },
-            output,
+          forSession(event.sessionID, () =>
+            ask(
+              {
+                id: event.source?.id ?? crypto.randomUUID(),
+                type: legacyName(event.action),
+                sessionID: event.sessionID,
+                messageID: event.source?.messageID ?? "",
+                ...(event.source === undefined ? {} : { callID: event.source.id }),
+                pattern: [...event.resources],
+                title: event.action,
+                metadata: event.metadata ?? {},
+                time: { created: Date.now() },
+              },
+              output,
+            ),
           ),
         );
         if (!asked) return;

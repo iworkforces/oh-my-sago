@@ -16,6 +16,7 @@ import {
 } from "./sessions.js";
 import { abortedBy, raceAbort } from "./signal.js";
 import type { ClientSessionState } from "./state.js";
+import { forSession } from "./toast-session.js";
 import { recordTodos } from "./todos.js";
 
 const types = [
@@ -186,11 +187,13 @@ export function clientEvents(
       const options = { signal };
       const ready = Promise.withResolvers<void>();
       const stopped = (error: unknown): boolean => abortedBy(signal, error);
-      const emit = async (event: LegacyEvent): Promise<void> => {
+      const emit = async (sessionID: string, event: LegacyEvent): Promise<void> => {
         // Once stopped, no handler starts: the rest of a batch, a resync or the seed unwinds here.
         signal.throwIfAborted();
         try {
-          await hooks.event?.({ event });
+          await forSession(sessionID, async () => {
+            await hooks.event?.({ event });
+          });
         } catch (error) {
           if (stopped(error)) throw error;
           console.error("Client bridge event handler failed", { type: event.type, error });
@@ -212,14 +215,17 @@ export function clientEvents(
         for (const message of current) {
           const old = previous.find((entry) => entry.info.id === message.info.id);
           if (JSON.stringify(old?.info) !== JSON.stringify(message.info))
-            await emit({
+            await emit(session.id, {
               type: LegacyEventType.MessageUpdated,
               properties: { info: message.info },
             });
           for (const part of message.parts) {
             const prior = old?.parts.find((entry) => entry.id === part.id);
             if (JSON.stringify(prior) !== JSON.stringify(part))
-              await emit({ type: LegacyEventType.MessagePartUpdated, properties: { part } });
+              await emit(session.id, {
+                type: LegacyEventType.MessagePartUpdated,
+                properties: { part },
+              });
           }
         }
         messages.set(session.id, current);
@@ -229,7 +235,7 @@ export function clientEvents(
         forget(sessionID);
         // Only another location's sessions go unobserved, and their deletion is not ours to announce.
         if (session === undefined) return;
-        await emit({
+        await emit(sessionID, {
           type: LegacyEventType.SessionDeleted,
           properties: { info: legacySession(session, context.app.version) },
         });
@@ -317,12 +323,12 @@ export function clientEvents(
         const flush = async (): Promise<void> => {
           for (const { sessionID, event } of pending.splice(0)) {
             await diff(sessionID);
-            await emit(event);
+            await emit(sessionID, event);
           }
         };
-        const now = async (legacy: LegacyEvent): Promise<void> => {
+        const now = async (sessionID: string, legacy: LegacyEvent): Promise<void> => {
           await flush();
-          await emit(legacy);
+          await emit(sessionID, legacy);
         };
         for (const event of events) {
           const { sessionID } = event.data;
@@ -339,9 +345,9 @@ export function clientEvents(
               retries.clear(sessionID);
               const announced = resynced.get(sessionID);
               resynced.delete(sessionID);
-              if (error !== undefined) await now(error);
+              if (error !== undefined) await now(sessionID, error);
               if (announced !== undefined && announced === session.time.idle) return;
-              await now(status(sessionID, SessionStatusKind.Idle));
+              await now(sessionID, status(sessionID, SessionStatusKind.Idle));
               pending.push({
                 sessionID,
                 event: { type: LegacyEventType.SessionIdle, properties: { sessionID } },
@@ -350,7 +356,7 @@ export function clientEvents(
             };
             switch (event.type) {
               case SessionEventType.Created:
-                await now({
+                await now(sessionID, {
                   type: LegacyEventType.SessionCreated,
                   properties: { info: legacySession(session, context.app.version) },
                 });
@@ -363,14 +369,14 @@ export function clientEvents(
               case SessionEventType.Permissions:
               case SessionEventType.Archived:
               case SessionEventType.Unarchived:
-                await now({
+                await now(sessionID, {
                   type: LegacyEventType.SessionUpdated,
                   properties: { info: legacySession(session, context.app.version) },
                 });
                 break;
               case SessionEventType.ExecutionStarted:
                 resynced.delete(sessionID);
-                await now(status(sessionID, SessionStatusKind.Busy));
+                await now(sessionID, status(sessionID, SessionStatusKind.Busy));
                 break;
               case SessionEventType.ExecutionFailed:
                 waits.delete(sessionID);
@@ -400,14 +406,15 @@ export function clientEvents(
                   next: event.data.at,
                 };
                 retries.set(sessionID, retry);
-                await now({
+                await now(sessionID, {
                   type: LegacyEventType.SessionStatus,
                   properties: { sessionID, status: retry },
                 });
                 break;
               }
               case SessionEventType.StepStarted:
-                if (retries.clear(sessionID)) await now(status(sessionID, SessionStatusKind.Busy));
+                if (retries.clear(sessionID))
+                  await now(sessionID, status(sessionID, SessionStatusKind.Busy));
                 break;
               case SessionEventType.ToolSuccess: {
                 const todos = await raceAbort(
@@ -415,14 +422,14 @@ export function clientEvents(
                   recordTodos(context, sessionID, event.data, records, options),
                 );
                 if (todos !== undefined)
-                  await now({
+                  await now(sessionID, {
                     type: LegacyEventType.TodoUpdated,
                     properties: { sessionID, todos },
                   });
                 break;
               }
               case SessionEventType.CompactionStarted:
-                await now({
+                await now(sessionID, {
                   type: LegacyEventType.SessionCompactionStarted,
                   properties: { sessionID },
                 });
@@ -488,17 +495,20 @@ export function clientEvents(
         sessions.set(session.id, session);
         const info = legacySession(session, context.app.version);
         if (known === undefined)
-          await emit({ type: LegacyEventType.SessionCreated, properties: { info } });
+          await emit(session.id, { type: LegacyEventType.SessionCreated, properties: { info } });
         else if (JSON.stringify(legacySession(known, context.app.version)) !== JSON.stringify(info))
-          await emit({ type: LegacyEventType.SessionUpdated, properties: { info } });
+          await emit(session.id, { type: LegacyEventType.SessionUpdated, properties: { info } });
         if (isBusy(session) && (known === undefined || !isBusy(known)))
-          await emit(status(session.id, SessionStatusKind.Busy));
+          await emit(session.id, status(session.id, SessionStatusKind.Busy));
         await emitMessages(session, records);
         if (!finished) return;
         settled.set(session.id, idle);
         resynced.set(session.id, idle);
-        await emit(status(session.id, SessionStatusKind.Idle));
-        await emit({ type: LegacyEventType.SessionIdle, properties: { sessionID: session.id } });
+        await emit(session.id, status(session.id, SessionStatusKind.Idle));
+        await emit(session.id, {
+          type: LegacyEventType.SessionIdle,
+          properties: { sessionID: session.id },
+        });
       };
 
       const reconcile = async (announce: boolean): Promise<void> => {

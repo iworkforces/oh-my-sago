@@ -13,6 +13,7 @@ import { BackgroundWaits, SessionRetries } from "./sessions.js";
 import { sessionRoutes } from "./session-routes.js";
 import { raceAbort } from "./signal.js";
 import { ClientSessionState } from "./state.js";
+import { toastSession } from "./toast-session.js";
 
 export type ClientBridge = {
   readonly input: PluginInput & {
@@ -218,9 +219,11 @@ export function createClientBridge(
   const events = clientEvents(context, retries, waits, sessionState);
   let closed = false;
   const showToast = async (request: Request): Promise<Response> => {
+    // Read before awaiting: the attribution ends soon after the hook that requested the toast.
+    const sessionID = toastSession();
     const input = await body(request, toast);
     try {
-      await toasts.emit("toast", input);
+      await toasts.emit("toast", sessionID === undefined ? input : { ...input, sessionID });
     } catch (error) {
       console.error("Client bridge could not deliver a toast", error);
     }
