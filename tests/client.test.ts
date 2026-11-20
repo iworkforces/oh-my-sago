@@ -32,6 +32,7 @@ test("the legacy client preserves discovery envelopes, session lifecycle, pagina
     deletedByEvent: "passed",
     deletedByRoute: "passed",
     retryAfterStop: "passed",
+    locationScope: "passed",
     systemMetadata: "passed",
   });
 }, 90_000);

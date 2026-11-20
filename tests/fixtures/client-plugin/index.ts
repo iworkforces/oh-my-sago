@@ -5,7 +5,13 @@ import { toastRpc } from "../../../src/toast.js";
 import { scriptedProvider } from "../scripted-provider.js";
 import { verifyClient } from "./contracts.js";
 import { clientModel, clientVariants } from "./model.js";
-import { verifyLifecycle, verifyStability, verifyStop, verifyTodoFailure } from "./stability.js";
+import {
+  verifyLifecycle,
+  verifyLocationScope,
+  verifyStability,
+  verifyStop,
+  verifyTodoFailure,
+} from "./stability.js";
 import { systemPrefix, systemProbe } from "./system.js";
 import { verifyRestoredTodos, verifyTodos } from "./todos.js";
 import { verifyTurns } from "./turns.js";
@@ -88,12 +94,14 @@ export default Plugin.define({
               const stability = await verifyStability(context, bridge);
               const stop = await verifyStop(context, bridge);
               const lifecycle = await verifyLifecycle(context, bridge, model);
+              const locationScope = await verifyLocationScope(context, bridge);
               await report(event.sessionID, {
                 ...result,
                 ...turns,
                 ...stability,
                 ...stop,
                 ...lifecycle,
+                locationScope,
                 systemMetadata: probe.verify(),
               });
             },
