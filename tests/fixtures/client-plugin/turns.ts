@@ -17,7 +17,7 @@ import {
   SessionStatusKind,
   ToolStateStatus,
 } from "../../../src/enums.js";
-import { EventLog, idleOf } from "./events.js";
+import { EventLog, compactionOf, idleOf } from "./events.js";
 import type { ClientModel } from "./model.js";
 
 type Scenario =
@@ -28,6 +28,7 @@ type Scenario =
   | "events"
   | "compaction"
   | "compactionCorrelation"
+  | "compactionEvents"
   | "retry"
   | "variants"
   | "queuedOverrides"
@@ -71,6 +72,12 @@ async function* withForeignEnd<Event extends OpenCodeEvent>(
     yield event;
   }
 }
+
+const compactionTypes: ReadonlySet<string> = new Set([
+  LegacyEventType.SessionCompactionStarted,
+  LegacyEventType.SessionCompactionFailed,
+  LegacyEventType.SessionCompacted,
+]);
 
 export function settledOrder(events: readonly LegacyEvent[]): string[] {
   const types = events.map((event) =>
@@ -176,6 +183,13 @@ export async function verifyTurns(
       LegacyEventType.SessionIdle,
     ],
   );
+  assert.deepEqual(
+    log
+      .since(compaction, success.id)
+      .map((event) => event.type)
+      .filter((type) => compactionTypes.has(type)),
+    [LegacyEventType.SessionCompactionStarted, LegacyEventType.SessionCompacted],
+  );
   const compactedHistory = await context.session.context({ sessionID: success.id });
   assert.ok(
     compactedHistory.some(
@@ -191,12 +205,25 @@ export async function verifyTurns(
     parts: [{ type: ContentKind.Text, text: "CLIENT_READ CLIENT_COMPACTION_FAILURE" }],
   };
   assert.ok((await client.session.prompt({ path: { id: invalid.id }, body: invalidPrompt })).data);
+  const declined = log.mark();
   const rejected = await client.session.summarize({
     path: { id: invalid.id },
     body: { providerID: "omsago-test", modelID: "scripted" },
   });
   assert.equal(rejected.response.status, 500);
   assert.match(JSON.stringify(rejected.error), /summary did not match the required template/);
+  await log.until(
+    compactionOf(LegacyEventType.SessionCompactionFailed, invalid.id),
+    "session.compaction.failed",
+    declined,
+  );
+  assert.deepEqual(
+    log.since(declined, invalid.id).filter((event) => compactionTypes.has(event.type)),
+    [
+      { type: LegacyEventType.SessionCompactionStarted, properties: { sessionID: invalid.id } },
+      { type: LegacyEventType.SessionCompactionFailed, properties: { sessionID: invalid.id } },
+    ],
+  );
 
   const raced = await create();
   assert.ok((await client.session.prompt({ path: { id: raced.id }, body: invalidPrompt })).data);
@@ -492,6 +519,7 @@ export async function verifyTurns(
     events: "passed",
     compaction: "passed",
     compactionCorrelation: "passed",
+    compactionEvents: "passed",
     retry: "passed",
     variants: "passed",
     queuedOverrides: "passed",

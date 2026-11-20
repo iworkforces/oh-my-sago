@@ -41,7 +41,9 @@ const types = [
   SessionEventType.ToolSuccess,
   SessionEventType.ToolFailed,
   SessionEventType.RetryScheduled,
+  SessionEventType.CompactionStarted,
   SessionEventType.CompactionEnded,
+  SessionEventType.CompactionFailed,
 ] as const;
 
 type NativeEvent = SelectedEvent<OpenCodeEvent, (typeof types)[number]>;
@@ -81,10 +83,19 @@ const seed = Symbol("seed");
 type Resync = { readonly connection: Connection };
 type Queued = NativeEvent | typeof seed | Resync;
 
-/** v1 todos carry no `id`; OmO keys them by content and priority. */
+/**
+ * v1 todos carry no `id`; OmO keys them by content and priority. The legacy SDK defines no
+ * compaction start or failure, but OmO's compaction registry reads both, by session only.
+ */
 export type LegacyEvent =
   | Exclude<Event, EventTodoUpdated>
-  | { type: typeof LegacyEventType.TodoUpdated; properties: { sessionID: string; todos: Todo[] } };
+  | { type: typeof LegacyEventType.TodoUpdated; properties: { sessionID: string; todos: Todo[] } }
+  | {
+      type:
+        | typeof LegacyEventType.SessionCompactionStarted
+        | typeof LegacyEventType.SessionCompactionFailed;
+      properties: { sessionID: string };
+    };
 
 export interface LegacyEventSink {
   // Method syntax keeps OmO's `Hooks`, typed against the id-carrying todo, assignable here.
@@ -208,7 +219,7 @@ export function clientEvents(
         if (session === undefined) return;
         await emit({
           type: LegacyEventType.SessionDeleted,
-          properties: { info: legacySession(session) },
+          properties: { info: legacySession(session, context.app.version) },
         });
       };
 
@@ -329,7 +340,7 @@ export function clientEvents(
               case SessionEventType.Created:
                 await now({
                   type: LegacyEventType.SessionCreated,
-                  properties: { info: legacySession(session) },
+                  properties: { info: legacySession(session, context.app.version) },
                 });
                 break;
               case SessionEventType.Renamed:
@@ -342,7 +353,7 @@ export function clientEvents(
               case SessionEventType.Unarchived:
                 await now({
                   type: LegacyEventType.SessionUpdated,
-                  properties: { info: legacySession(session) },
+                  properties: { info: legacySession(session, context.app.version) },
                 });
                 break;
               case SessionEventType.ExecutionStarted:
@@ -396,10 +407,25 @@ export function clientEvents(
                   });
                 break;
               }
+              case SessionEventType.CompactionStarted:
+                await now({
+                  type: LegacyEventType.SessionCompactionStarted,
+                  properties: { sessionID },
+                });
+                break;
               case SessionEventType.CompactionEnded:
                 pending.push({
                   sessionID,
                   event: { type: LegacyEventType.SessionCompacted, properties: { sessionID } },
+                });
+                break;
+              case SessionEventType.CompactionFailed:
+                pending.push({
+                  sessionID,
+                  event: {
+                    type: LegacyEventType.SessionCompactionFailed,
+                    properties: { sessionID },
+                  },
                 });
                 break;
               case SessionEventType.InboxDelivered:
@@ -442,10 +468,10 @@ export function clientEvents(
           context.session.context({ sessionID: session.id }, options),
         );
         sessions.set(session.id, session);
-        const info = legacySession(session);
+        const info = legacySession(session, context.app.version);
         if (known === undefined)
           await emit({ type: LegacyEventType.SessionCreated, properties: { info } });
-        else if (JSON.stringify(legacySession(known)) !== JSON.stringify(info))
+        else if (JSON.stringify(legacySession(known, context.app.version)) !== JSON.stringify(info))
           await emit({ type: LegacyEventType.SessionUpdated, properties: { info } });
         if (isBusy(session) && (known === undefined || !isBusy(known)))
           await emit(status(session.id, SessionStatusKind.Busy));

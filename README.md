@@ -55,6 +55,24 @@ with OpenCode v2; the bridge does not implement another authentication system.
   publishes every directory's session events on one bus. Each instance translates
   only its own directory's sessions, so one finished turn produces one
   `session.idle` and at most one todo-continuation countdown and prompt.
+- Native compaction start and failure reach OmO as
+  `session.compaction.started` and `session.compaction.failed`. OmO's model
+  fallback uses them to hold its timeout and error handling while a compaction
+  runs, and to resume once it fails.
+- OmO's `session_list`, `session_read`, and `session_search` tools first try a
+  global SDK client at the plugin's `serverUrl`. omsago gives OmO a loopback
+  address that answers every request with `NotFoundError`, so these tools fall
+  back to the plugin client, which reads sessions from the native v2 APIs.
+- Tools that OmO's configuration turns off in `tools`, such as `grep_app_*` or
+  the task tools that its task system replaces, become native deny rules, so the
+  model does not see them. OmO's per-agent permissions can still allow them.
+- When OpenCode reloads the plugin, it closes the old instance before the new
+  one finishes starting, while tool calls from a turn already under way can
+  still be running in the old OmO runtime. A closed instance forwards those
+  client calls to the newer instance for the same directory, waiting up to 10
+  seconds for it to open, and fails with HTTP 503 only if none does. A late call
+  from the old runtime therefore still takes effect: it can prompt or abort the
+  session it names.
 
 The native CLI integration suite exercises a real OmO agent turn and skill,
 protected writes, synchronous delegation, background completion and failure,
@@ -73,8 +91,23 @@ legacy calls return an error, usually HTTP 501, rather than an empty successful
 response. In particular, the legacy session-todo endpoint is unavailable: the v2
 plugin context has no authoritative current-todo read API. Legacy history is
 projected from the native context window, so it does not expose the full
-pre-compaction archive. The legacy configuration view is a domain-derived
-snapshot, not the original merged v1 config object.
+pre-compaction archive.
+
+OmO's configuration hook runs against a view that omsago builds from the native
+v2 runtime, not against your merged `opencode.json`. That view carries only
+agents, the selected model, and commands, so OmO never sees `mcp`,
+`permission`, `default_agent`, `formatter`, or `skills`. OpenCode still
+applies those fields natively, so your own settings keep working, but OmO does
+not take them into account: it keeps its own default agent, does not use your
+formatters for its own edits, and does not read the skill sources you declare in
+configuration. Put the equivalent setting in OmO's own configuration when you
+want OmO itself to follow it.
+
+Some native events have no legacy translation. An interrupted turn reaches OmO
+as a `session.error` with an abort, not as a separate stop event. Permission
+requests, permission replies, and questions are not forwarded as events, so OmO
+sends no desktop notification while a permission prompt waits; OmO still sees
+questions through its tool hooks.
 
 Commands support text templates, `$ARGUMENTS`, positional arguments, and
 agent/model selection. Legacy command subtasks and shell/file expansion fail

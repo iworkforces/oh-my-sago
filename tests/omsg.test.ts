@@ -8,6 +8,7 @@ test("the real OmO factory runs its agent and skill tool on the pinned OpenCode 
     activation: "passed",
     turn: "passed",
     skill: "passed",
+    sessions: "passed",
     delegation: "passed",
     background: "passed",
     failure: "passed",

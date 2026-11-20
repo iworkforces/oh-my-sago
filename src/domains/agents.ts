@@ -72,6 +72,17 @@ function globalPermissions(value: unknown): NativePermission[] {
   });
 }
 
+/**
+ * Turns the legacy top-level `tools` toggles into global deny rules. Only `false` entries count,
+ * because a native tool is available unless a rule denies it. The denials come before the
+ * `permission` rules and each agent's own rules, so an explicit rule can still allow the tool.
+ */
+function toolDenials(value: Config["tools"]): NativePermission[] {
+  return Object.entries(value ?? {}).flatMap(([tool, enabled]): NativePermission[] =>
+    enabled ? [] : [{ action: nativeAction(tool), resource: "*", effect: PermissionEffect.Deny }],
+  );
+}
+
 function prepareAgent(
   name: string,
   definition: AgentConfig,
@@ -117,7 +128,7 @@ export async function registerAgents(
       reason: selection.error.message,
     });
   let defaultAgent = requested;
-  const global = globalPermissions(config.permission);
+  const global = [...toolDenials(config.tools), ...globalPermissions(config.permission)];
   const removals: string[] = [];
   const overrides: AgentOverride[] = [];
   for (const [name, definition] of Object.entries(config.agent ?? {})) {

@@ -20,7 +20,11 @@ export function sessionRoutes(
     const operation = path[2];
     if (sessionID === undefined) {
       if (request.method === "GET")
-        return Response.json((await listSessions(context, request)).map(legacySession));
+        return Response.json(
+          (await listSessions(context, request)).map((session) =>
+            legacySession(session, context.app.version),
+          ),
+        );
       if (request.method === "POST") {
         const input = await body(request, createBody);
         const directory =
@@ -42,7 +46,7 @@ export function sessionRoutes(
           },
           options,
         );
-        return Response.json(legacySession(session));
+        return Response.json(legacySession(session, context.app.version));
       }
     }
     if (sessionID === SessionOperation.Status && request.method === "GET") {
@@ -55,7 +59,9 @@ export function sessionRoutes(
     if (operation === undefined && path.length === 2) {
       switch (request.method) {
         case "GET":
-          return Response.json(legacySession(await context.session.get({ sessionID }, options)));
+          return Response.json(
+            legacySession(await context.session.get({ sessionID }, options), context.app.version),
+          );
         case "PATCH": {
           const input = await body(request, updateBody);
           await context.session.update(
@@ -68,7 +74,9 @@ export function sessionRoutes(
             },
             options,
           );
-          return Response.json(legacySession(await context.session.get({ sessionID }, options)));
+          return Response.json(
+            legacySession(await context.session.get({ sessionID }, options), context.app.version),
+          );
         }
         case "DELETE":
           await context.session.remove({ sessionID }, options);

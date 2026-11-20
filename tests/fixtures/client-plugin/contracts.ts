@@ -22,7 +22,18 @@ export async function verifyClient(fixture: {
   readonly bridge: ReturnType<typeof createClientBridge>;
   readonly session: SessionInfo;
 }): Promise<
-  Readonly<Record<"discovery" | "sessions" | "notFound" | "pagination" | "toasts", "passed">>
+  Readonly<
+    Record<
+      | "discovery"
+      | "sessions"
+      | "notFound"
+      | "pagination"
+      | "cursorCycle"
+      | "invalidReleaseDate"
+      | "toasts",
+      "passed"
+    >
+  >
 > {
   const directory = fixture.context.location.directory;
   {
@@ -142,6 +153,92 @@ export async function verifyClient(fixture: {
     }
   }
   {
+    let calls = 0;
+    const context = {
+      ...fixture.context,
+      session: {
+        ...fixture.context.session,
+        async list(
+          _input?: Parameters<typeof fixture.context.session.list>[0],
+          options?: Parameters<typeof fixture.context.session.list>[1],
+        ) {
+          options?.signal?.throwIfAborted();
+          calls += 1;
+          // Yield to the event loop so a runaway pager cannot starve the bounding timer.
+          await new Promise<void>((resolve) => setImmediate(resolve));
+          return { data: [fixture.session], cursor: { next: "loop" } };
+        },
+      },
+    };
+    const bridge = createClientBridge(context, {
+      emit: () => Promise.reject(new Error("unused toast transport")),
+    });
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const bounded = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        controller.abort();
+        reject(new Error("pagination did not terminate"));
+      }, 5_000);
+    });
+    try {
+      const sessions = await Promise.race([
+        bridge.input.client.session.list({ signal: controller.signal }),
+        bounded,
+      ]);
+      assert.deepEqual(
+        sessions.data?.map((session) => session.id),
+        [fixture.session.id],
+      );
+      assert.equal(calls, 2);
+    } finally {
+      clearTimeout(timer);
+      await bridge.close();
+    }
+  }
+  {
+    const baseline = await fixture.bridge.input.client.provider.list();
+    const baselineModels = baseline.data?.all.find(
+      (provider) => provider.id === "omsago-test",
+    )?.models;
+    assert.ok(baselineModels?.["scripted"] !== undefined);
+    assert.match(baselineModels["scripted"].release_date, /^\d{4}-\d{2}-\d{2}$/);
+    const listed = await fixture.context.model.list();
+    const valid = listed.data.find(
+      (model) => model.providerID === "omsago-test" && model.id === "scripted",
+    );
+    assert.ok(valid !== undefined);
+    const context = {
+      ...fixture.context,
+      model: {
+        ...fixture.context.model,
+        async list(
+          input?: Parameters<typeof fixture.context.model.list>[0],
+          options?: Parameters<typeof fixture.context.model.list>[1],
+        ) {
+          const models = await fixture.context.model.list(input, options);
+          const invalid = { ...valid, id: "bad-date", time: { released: Number.MAX_SAFE_INTEGER } };
+          return { ...models, data: [...models.data, invalid] };
+        },
+      },
+    };
+    const bridge = createClientBridge(context, {
+      emit: () => Promise.reject(new Error("unused toast transport")),
+    });
+    try {
+      const providers = await bridge.input.client.provider.list();
+      assert.equal(providers.response.status, 200, JSON.stringify(providers.error));
+      const models = providers.data?.all.find((provider) => provider.id === "omsago-test")?.models;
+      assert.ok(models !== undefined);
+      const { "bad-date": degraded, ...intact } = models;
+      assert.equal(degraded?.release_date, "");
+      assert.equal(degraded?.name, valid.name);
+      assert.deepEqual(intact, baselineModels);
+    } finally {
+      await bridge.close();
+    }
+  }
+  {
     const tui = fixture.bridge.input.client.tui;
     const shown = await tui.showToast({ body: fixtureToast });
     assert.equal(shown.response.status, 200);
@@ -155,6 +252,8 @@ export async function verifyClient(fixture: {
     sessions: "passed",
     notFound: "passed",
     pagination: "passed",
+    cursorCycle: "passed",
+    invalidReleaseDate: "passed",
     toasts: "passed",
   } as const;
 }

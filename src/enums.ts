@@ -248,6 +248,8 @@ export const PromptFileSourceKind = {
 } as const satisfies Record<string, PromptFileSource["type"]>;
 export type PromptFileSourceKind = (typeof PromptFileSourceKind)[keyof typeof PromptFileSourceKind];
 
+/** Legacy event types OmO reads that no SDK `Event` union defines. */
+type OmoEventType = "session.compaction.started" | "session.compaction.failed";
 export const LegacyEventType = {
   SessionCreated: "session.created",
   SessionUpdated: "session.updated",
@@ -256,10 +258,12 @@ export const LegacyEventType = {
   SessionError: "session.error",
   SessionIdle: "session.idle",
   SessionCompacted: "session.compacted",
+  SessionCompactionStarted: "session.compaction.started",
+  SessionCompactionFailed: "session.compaction.failed",
   MessageUpdated: "message.updated",
   MessagePartUpdated: "message.part.updated",
   TodoUpdated: "todo.updated",
-} as const satisfies Record<string, Event["type"]>;
+} as const satisfies Record<string, Event["type"] | OmoEventType>;
 export type LegacyEventType = (typeof LegacyEventType)[keyof typeof LegacyEventType];
 
 export const NativeTool = {
