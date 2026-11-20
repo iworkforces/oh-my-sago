@@ -7,7 +7,7 @@ import { z } from "zod";
 import { BridgeError } from "../../../src/client/errors.js";
 import { clientEvents } from "../../../src/client/events.js";
 import { createClientBridge } from "../../../src/client/index.js";
-import { type RetryStatus, SessionRetries } from "../../../src/client/sessions.js";
+import { BackgroundWaits, type RetryStatus, SessionRetries } from "../../../src/client/sessions.js";
 import { sessionRoutes } from "../../../src/client/session-routes.js";
 import { ClientSessionState } from "../../../src/client/state.js";
 import {
@@ -185,7 +185,12 @@ export async function verifyTodoFailure(
     },
   };
   const { log, held } = holdingLog();
-  const events = clientEvents(failing, new SessionRetries(), new ClientSessionState());
+  const events = clientEvents(
+    failing,
+    new SessionRetries(),
+    new BackgroundWaits(),
+    new ClientSessionState(),
+  );
   await using cleanup = new AsyncDisposableStack();
   cleanup.defer(() => events.stop());
   await events.start(log.sink);
@@ -231,7 +236,7 @@ export async function verifyStability(
   const { log, held } = holdingLog();
   const retries = new SessionRetries();
   const state = new ClientSessionState();
-  const events = clientEvents(flaky, retries, state);
+  const events = clientEvents(flaky, retries, new BackgroundWaits(), state);
   await using cleanup = new AsyncDisposableStack();
   cleanup.defer(() => events.stop());
 
@@ -357,7 +362,12 @@ export async function verifyLocationScope(
     },
   };
   const log = new EventLog();
-  const events = clientEvents(scoped, new SessionRetries(), new ClientSessionState());
+  const events = clientEvents(
+    scoped,
+    new SessionRetries(),
+    new BackgroundWaits(),
+    new ClientSessionState(),
+  );
   await using cleanup = new AsyncDisposableStack();
   cleanup.defer(() => events.stop());
   const logged = await errorsDuring(async () => {
@@ -425,9 +435,15 @@ export async function verifyStop(
   });
   const entered = Promise.withResolvers<void>();
   let handled = 0;
-  const stalled = clientEvents(context, new SessionRetries(), new ClientSessionState(), {
-    stopMs: 50,
-  });
+  const stalled = clientEvents(
+    context,
+    new SessionRetries(),
+    new BackgroundWaits(),
+    new ClientSessionState(),
+    {
+      stopMs: 50,
+    },
+  );
   cleanup.defer(() => stalled.stop());
   await stalled.start({
     async event() {
@@ -466,9 +482,15 @@ export async function verifyStop(
       },
     },
   };
-  const seedless = clientEvents(unlisted, new SessionRetries(), new ClientSessionState(), {
-    startMs: 50,
-  });
+  const seedless = clientEvents(
+    unlisted,
+    new SessionRetries(),
+    new BackgroundWaits(),
+    new ClientSessionState(),
+    {
+      startMs: 50,
+    },
+  );
   cleanup.defer(() => seedless.stop());
   await assert.rejects(seedless.start(new EventLog().sink), bridgeError(504));
   assert.equal(listed?.aborted, true);
@@ -477,9 +499,15 @@ export async function verifyStop(
   const stream = new FlakyStream(context);
   const flaky: Plugin.Context = { ...context, event: { subscribe: stream.subscribe } };
   const { log, held } = holdingLog();
-  const delivering = clientEvents(flaky, new SessionRetries(), new ClientSessionState(), {
-    stopMs: 60_000,
-  });
+  const delivering = clientEvents(
+    flaky,
+    new SessionRetries(),
+    new BackgroundWaits(),
+    new ClientSessionState(),
+    {
+      stopMs: 60_000,
+    },
+  );
   cleanup.defer(() => delivering.stop());
   cleanup.defer(() => {
     held.release.resolve();
@@ -596,7 +624,7 @@ export async function verifyLifecycle(
 
   const retries = new SessionRetries();
   const state = new ClientSessionState();
-  const events = clientEvents(context, retries, state);
+  const events = clientEvents(context, retries, new BackgroundWaits(), state);
   cleanup.defer(() => events.stop());
   const log = new EventLog();
   await events.start(log.sink);
@@ -617,7 +645,7 @@ export async function verifyLifecycle(
 
   const routeRetries = new SessionRetries();
   const routeState = new ClientSessionState();
-  const routes = sessionRoutes(context, routeState, routeRetries);
+  const routes = sessionRoutes(context, routeState, routeRetries, new BackgroundWaits());
   const routed = await createSession(bridge, "deleted by route");
   await remember(routeState, routeRetries, routed);
   const response = await routes(

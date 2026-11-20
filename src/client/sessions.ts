@@ -1,5 +1,6 @@
 import type { Plugin } from "@opencode/plugin";
 import type { SessionInfo } from "@opencode/client";
+import type { SessionIdle } from "@opencode/plugin/promise/session";
 import type { Session, SessionStatus } from "@opencode-ai/sdk";
 import { SessionStatusKind } from "../enums.js";
 
@@ -44,6 +45,38 @@ export class SessionRetries {
   status(session: SessionInfo): SessionStatus {
     if (!isBusy(session)) return { type: SessionStatusKind.Idle };
     return this.#pending.get(session.id) ?? { type: SessionStatusKind.Busy };
+  }
+}
+
+/**
+ * Sessions that went idle while work they own still runs, such as a background shell or a Code Mode
+ * script that outlived its call. That work's notice wakes the session for another execution, so the
+ * turn is not over: a v1 session went idle once per turn, and OmO reads that idle as the end of it,
+ * completing and then deleting a background task's session. Shared by one bridge's event loop,
+ * which holds such a session's idle back, and its status route, which keeps reporting it busy.
+ */
+export class BackgroundWaits {
+  readonly #waiting = new Set<string>();
+
+  /** Records the work OpenCode listed as the session went idle; only its own work wakes it. */
+  record(idle: SessionIdle): void {
+    if (idle.background.some((work) => work.sessionID === idle.sessionID))
+      this.#waiting.add(idle.sessionID);
+    else this.#waiting.delete(idle.sessionID);
+  }
+  has(sessionID: string): boolean {
+    return this.#waiting.has(sessionID);
+  }
+  delete(sessionID: string): void {
+    this.#waiting.delete(sessionID);
+  }
+  clear(): void {
+    this.#waiting.clear();
+  }
+  status(session: SessionInfo, status: SessionStatus): SessionStatus {
+    return status.type === SessionStatusKind.Idle && this.#waiting.has(session.id)
+      ? { type: SessionStatusKind.Busy }
+      : status;
   }
 }
 

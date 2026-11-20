@@ -3,7 +3,12 @@ import { SessionOperation } from "../enums.js";
 import { BridgeError, unsupported } from "./errors.js";
 import { legacyMessages } from "./messages.js";
 import { body, createBody, updateBody } from "./requests.js";
-import { type SessionRetries, legacySession, listSessions } from "./sessions.js";
+import {
+  type BackgroundWaits,
+  type SessionRetries,
+  legacySession,
+  listSessions,
+} from "./sessions.js";
 import { permissionRules, type ClientSessionState } from "./state.js";
 import { promptRoutes } from "./prompts.js";
 import { sessionTodos } from "./todos.js";
@@ -12,6 +17,7 @@ export function sessionRoutes(
   context: Plugin.Context,
   state: ClientSessionState,
   retries: SessionRetries,
+  waits: BackgroundWaits,
 ) {
   const prompt = promptRoutes(context);
   return async (request: Request, path: readonly string[]): Promise<Response> => {
@@ -52,7 +58,9 @@ export function sessionRoutes(
     if (sessionID === SessionOperation.Status && request.method === "GET") {
       const sessions = await listSessions(context, request);
       return Response.json(
-        Object.fromEntries(sessions.map((session) => [session.id, retries.status(session)])),
+        Object.fromEntries(
+          sessions.map((session) => [session.id, waits.status(session, retries.status(session))]),
+        ),
       );
     }
     if (sessionID === undefined) return unsupported(`session ${request.method}`);
@@ -82,6 +90,7 @@ export function sessionRoutes(
           await context.session.remove({ sessionID }, options);
           state.delete(sessionID);
           retries.clear(sessionID);
+          waits.delete(sessionID);
           return Response.json(true);
       }
     }
