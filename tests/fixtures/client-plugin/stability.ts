@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { mkdir, rm } from "node:fs/promises";
 import type { SessionInfo } from "@opencode/client";
 import type { Plugin } from "@opencode/plugin";
 import { Location } from "@opencode/schema/location";
@@ -384,6 +385,21 @@ export async function verifyLocationScope(
   return "passed";
 }
 
+const routesKey = Symbol.for("omsago.bridge.routes.v1");
+
+/** Settles at the next directory lookup in the bridge registry, as a closed bridge makes one. */
+function nextLookup(): Promise<void> {
+  const registry: unknown = Reflect.get(globalThis, routesKey);
+  assert.ok(registry instanceof Map);
+  const looked = Promise.withResolvers<void>();
+  Reflect.set(registry, "get", (key: unknown): unknown => {
+    Reflect.deleteProperty(registry, "get");
+    looked.resolve();
+    return registry.get(key);
+  });
+  return looked.promise;
+}
+
 const bridgeError =
   (status: number) =>
   (error: unknown): boolean =>
@@ -395,7 +411,10 @@ export async function verifyStop(
   bridge: Bridge,
 ): Promise<
   Readonly<
-    Record<"stalledHandler" | "stalledSeed" | "stoppedDelivery" | "closedTransport", "passed">
+    Record<
+      "stalledHandler" | "stalledSeed" | "stoppedDelivery" | "closedTransport" | "successor",
+      "passed"
+    >
   >
 > {
   await using cleanup = new AsyncDisposableStack();
@@ -512,7 +531,56 @@ export async function verifyStop(
     stalledSeed: "passed",
     stoppedDelivery: "passed",
     closedTransport: "passed",
+    successor: await verifySuccessor(context),
   };
+}
+
+/**
+ * A closed bridge waits for a reloaded one in its directory, gives up with 503 when none opens, and
+ * stops waiting when its caller aborts. The registry forgets a directory once its bridges close.
+ */
+async function verifySuccessor(context: Plugin.Context): Promise<"passed"> {
+  const directory = Location.Info.fields.directory.make(
+    `${context.location.directory}/omsago-successor-${crypto.randomUUID()}`,
+  );
+  const located: Plugin.Context = {
+    ...context,
+    location: new Location.Info({ directory, project: context.location.project }),
+  };
+  const toasts = { emit: () => Promise.resolve() };
+  await using cleanup = new AsyncDisposableStack();
+  await mkdir(directory);
+  cleanup.defer(() => rm(directory, { recursive: true, force: true }));
+
+  const late = createClientBridge(located, toasts, { successorMs: 10_000 });
+  await late.close();
+  const lookup = nextLookup();
+  const pending = late.input.client.app.agents();
+  await Promise.race([lookup, pending]);
+  const reloaded = createClientBridge(located, toasts);
+  cleanup.defer(() => reloaded.close());
+  const agents = await pending;
+  assert.ok(agents.data, JSON.stringify(agents.error));
+  await reloaded.close();
+
+  const unanswered = createClientBridge(located, toasts, { successorMs: 50 });
+  await unanswered.close();
+  await assert.rejects(unanswered.input.client.app.agents(), bridgeError(503));
+
+  const waiting = createClientBridge(located, toasts, { successorMs: 60_000 });
+  await waiting.close();
+  const controller = new AbortController();
+  const reason = new Error("fixture abort");
+  const waited = nextLookup();
+  const abandoned = waiting.input.client.app.agents({ signal: controller.signal });
+  await Promise.race([waited, abandoned]);
+  controller.abort(reason);
+  await assert.rejects(abandoned, (error) => error === reason);
+
+  const registry: unknown = Reflect.get(globalThis, routesKey);
+  assert.ok(registry instanceof Map);
+  assert.equal(registry.has(directory), false);
+  return "passed";
 }
 
 /**

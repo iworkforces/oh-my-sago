@@ -29,6 +29,7 @@ test("the legacy client preserves discovery envelopes, session lifecycle, pagina
     stalledSeed: "passed",
     stoppedDelivery: "passed",
     closedTransport: "passed",
+    successor: "passed",
     deletedByEvent: "passed",
     deletedByRoute: "passed",
     retryAfterStop: "passed",
