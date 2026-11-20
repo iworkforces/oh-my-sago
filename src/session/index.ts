@@ -4,7 +4,8 @@ import type { Hooks } from "@opencode-ai/plugin";
 import type { ClientSessionState, Turn } from "../client/state.js";
 import { ContentKind, SessionRequestKind } from "../enums.js";
 import { offersVariant, requestContext } from "./model.js";
-import { transformMessages } from "./messages.js";
+import { hideMarkers, markerMetadata } from "./markers.js";
+import { cleanInternalPrompts, transformMessages } from "./messages.js";
 import { transformPrompt } from "./prompt.js";
 
 type SystemPart = SessionRequest["system"][number];
@@ -39,11 +40,19 @@ export async function registerSessions(
     // transformMessages assigns event.messages only after its hook and repair succeed, so a failure
     // in either transform leaves the request as the host built it.
     await transformMessages(event, hooks);
+    event.messages = cleanInternalPrompts(event.messages);
     event.system = system;
   };
   stack.defer(
-    (await context.session.hook("prompt", (event) => transformPrompt(context, event, hooks)))
-      .dispose,
+    (
+      await context.session.hook("prompt", async (event) => {
+        await transformPrompt(context, event, hooks);
+        const { text, markers } = hideMarkers(event.prompt.text);
+        if (markers.length === 0) return;
+        event.prompt.text = text;
+        event.metadata = { ...event.metadata, [markerMetadata]: markers };
+      })
+    ).dispose,
   );
   stack.defer(
     (

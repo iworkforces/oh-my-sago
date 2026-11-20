@@ -13,6 +13,7 @@ import {
   ToolResultKind,
   ToolStateStatus,
 } from "../enums.js";
+import { hideMarkers, showMarkers } from "./markers.js";
 import { type Backing, answering, restore, unsupported } from "./message-restore.js";
 
 type RequestMessage = SessionRequest["messages"][number];
@@ -310,6 +311,45 @@ function answerCalls(
   return turns.flatMap((entries) => answerTurn(entries, fallback));
 }
 
+const reminderBlock = /<system-reminder>[\s\S]*?<\/system-reminder>/g;
+
+/**
+ * Shows the model OmO's internal prompts as written for it: without OmO's markers, and without a
+ * `<system-reminder>` block that an earlier user message of the same turn already carries. OmO
+ * records a background notice without a reply while its parent looks busy, then sends the same
+ * notice to wake the parent; v2 holds the first in the session inbox until that wake, so both reach
+ * the model side by side. A message left empty is dropped. A reminder repeated after an assistant
+ * reply is kept, since that repeat is deliberate.
+ */
+export function cleanInternalPrompts(messages: readonly RequestMessage[]): RequestMessage[] {
+  let seen = new Set<string>();
+  return messages.flatMap((native): RequestMessage[] => {
+    if (native.role === MessageRole.Assistant) seen = new Set();
+    if (native.role !== MessageRole.User) return [native];
+    let changed = false;
+    const content = native.content.flatMap((part): (typeof native.content)[number][] => {
+      if (part.type !== ContentKind.Text) return [part];
+      const { text: unmarked, markers } = hideMarkers(part.text);
+      let removed = markers.length > 0;
+      const cleaned = unmarked
+        .replace(reminderBlock, (block) => {
+          if (!seen.has(block)) {
+            seen.add(block);
+            return block;
+          }
+          removed = true;
+          return "";
+        })
+        .trim();
+      if (!removed) return [part];
+      changed = true;
+      return cleaned === "" ? [] : [{ ...part, text: cleaned }];
+    });
+    if (!changed) return [native];
+    return content.length === 0 ? [] : [{ ...nativeFields(native), role: native.role, content }];
+  });
+}
+
 export async function transformMessages(event: SessionRequest, hooks: Hooks): Promise<void> {
   const hook = hooks["experimental.chat.messages.transform"];
   if (hook === undefined) return;
@@ -340,6 +380,11 @@ export async function transformMessages(event: SessionRequest, hooks: Hooks): Pr
               cost: 0,
               tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
             };
+      // OmO reads its markers back from the text a user prompt was stored without.
+      const marked =
+        native.role === MessageRole.User
+          ? native.content.findLastIndex((part) => part.type === ContentKind.Text)
+          : -1;
       return {
         info,
         parts: native.content.map((part, partIndex) => {
@@ -353,6 +398,8 @@ export async function transformMessages(event: SessionRequest, hooks: Hooks): Pr
             },
             result,
           );
+          if (partIndex === marked && projected.type === PartKind.Text)
+            projected.text = showMarkers(projected.text, native.metadata);
           parts.set(projected.id, {
             native: part,
             before: structuredClone(projected),

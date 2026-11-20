@@ -12,6 +12,7 @@ import {
 } from "../enums.js";
 import { assertNever } from "./errors.js";
 import { legacyToolState } from "./tool-parts.js";
+import { showMarkers } from "../session/markers.js";
 
 export function legacyError(error: SessionStructuredError): NonNullable<AssistantMessage["error"]> {
   if (
@@ -63,8 +64,9 @@ export function legacyMessages(
           {
             ...partBase,
             type: PartKind.Text,
-            text: record.text,
-            ...(record.type === RecordType.User ? {} : { synthetic: true }),
+            ...(record.type === RecordType.User
+              ? { text: showMarkers(record.text, record.metadata) }
+              : { text: record.text, synthetic: true }),
           },
         ];
         if (record.type === RecordType.User) {
