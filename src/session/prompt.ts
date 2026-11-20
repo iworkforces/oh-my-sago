@@ -7,7 +7,7 @@ import { clientMetadata, promptOverrides } from "../client/state.js";
 import { BridgeError } from "../client/errors.js";
 import { assertNever } from "../client/errors.js";
 import { MessageRole, PartKind } from "../enums.js";
-import { switchModelKeepingVariant } from "./model.js";
+import { applySwitch, resolveSwitch } from "./model.js";
 
 export async function transformPrompt(
   context: Plugin.Context,
@@ -107,17 +107,18 @@ export async function transformPrompt(
         assertNever(part);
     }
   }
+  const updated = output.message;
+  const switching = await resolveSwitch(context, event.sessionID, {
+    agent: updated.agent !== "" && updated.agent !== session.agent ? updated.agent : undefined,
+    model:
+      updated.model.providerID !== selected.providerID || updated.model.modelID !== selected.id
+        ? { providerID: updated.model.providerID, id: updated.model.modelID }
+        : undefined,
+  });
+  await applySwitch(context, event.sessionID, switching);
   event.prompt.text = texts.join("\n");
   event.prompt.files = files;
   event.prompt.agents = agents;
-  const updated = output.message;
-  if (updated.agent !== "" && updated.agent !== session.agent)
-    await context.session.switchAgent({ sessionID: event.sessionID, agent: updated.agent });
-  if (updated.model.providerID !== selected.providerID || updated.model.modelID !== selected.id)
-    await switchModelKeepingVariant(context, event.sessionID, {
-      providerID: updated.model.providerID,
-      id: updated.model.modelID,
-    });
   const chosen = typeof updated.variant === "string" ? updated.variant : undefined;
   if (updated.system !== undefined || updated.tools !== undefined || chosen !== stored.variant) {
     const { variant: _variant, ...overrides } = stored;

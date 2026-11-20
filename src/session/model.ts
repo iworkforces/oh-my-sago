@@ -10,6 +10,18 @@ import { MessageRole } from "../enums.js";
 type ModelSelection = { readonly providerID: string; readonly id: string };
 type Options = { readonly signal: AbortSignal };
 
+/** An agent and model a prompt path asks to switch to; an explicit variant must be offered. */
+export interface SessionSwitch {
+  readonly agent?: string | undefined;
+  readonly model?: (ModelSelection & { readonly variant?: string | undefined }) | undefined;
+}
+
+/** The exact switches a validated `SessionSwitch` makes. */
+export interface ResolvedSwitch {
+  readonly agent?: string;
+  readonly model?: ModelSelection & { readonly variant?: string };
+}
+
 export async function offersVariant(
   context: Plugin.Context,
   model: ModelSelection,
@@ -28,21 +40,62 @@ export async function offersVariant(
   );
 }
 
-export async function switchModelKeepingVariant(
+/**
+ * Checks every input of a switch before anything changes, since native switches accept unknown
+ * agents and models: the agent exists, the model is listed, and an explicit variant is one it
+ * offers. Without an explicit variant, the session's current one is kept when the model offers it.
+ */
+export async function resolveSwitch(
   context: Plugin.Context,
   sessionID: string,
-  model: ModelSelection,
+  request: SessionSwitch,
+  options?: Options,
+): Promise<ResolvedSwitch> {
+  const location = { directory: context.location.directory };
+  const { agent, model } = request;
+  if (
+    agent !== undefined &&
+    !(await context.agent.list({ location }, options)).data.some((entry) => entry.id === agent)
+  )
+    throw new BridgeError(404, `Unknown agent ${agent}`);
+  if (model === undefined) return agent === undefined ? {} : { agent };
+  const [session, models] = await Promise.all([
+    context.session.get({ sessionID }, options),
+    context.model.list({ location }, options),
+  ]);
+  const listed = models.data.find(
+    (entry) => entry.providerID === model.providerID && entry.id === model.id,
+  );
+  if (listed === undefined)
+    throw new BridgeError(404, `Unknown model ${model.providerID}/${model.id}`);
+  const offered = (variant: string): boolean =>
+    listed.variants.some((entry) => entry.id === variant);
+  if (model.variant !== undefined && !offered(model.variant))
+    throw new BridgeError(
+      400,
+      `Model ${model.providerID}/${model.id} does not offer variant ${model.variant}`,
+    );
+  const variant = model.variant ?? session.model?.variant;
+  return {
+    ...(agent === undefined ? {} : { agent }),
+    model: {
+      providerID: model.providerID,
+      id: model.id,
+      ...(variant !== undefined && offered(variant) ? { variant } : {}),
+    },
+  };
+}
+
+export async function applySwitch(
+  context: Plugin.Context,
+  sessionID: string,
+  resolved: ResolvedSwitch,
   options?: Options,
 ): Promise<void> {
-  const variant = (await context.session.get({ sessionID }, options)).model?.variant;
-  const kept =
-    variant !== undefined && (await offersVariant(context, model, variant, options))
-      ? { variant }
-      : {};
-  await context.session.switchModel(
-    { sessionID, model: { providerID: model.providerID, id: model.id, ...kept } },
-    options,
-  );
+  if (resolved.agent !== undefined)
+    await context.session.switchAgent({ sessionID, agent: resolved.agent }, options);
+  if (resolved.model !== undefined)
+    await context.session.switchModel({ sessionID, model: resolved.model }, options);
 }
 
 export async function requestContext(

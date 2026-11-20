@@ -15,19 +15,20 @@ import { abortedBy } from "./signal.js";
 import { clientMetadata, promptOverrides } from "./state.js";
 import { nativeAction } from "../domains/permissions.js";
 import { metadata } from "../domains/value.js";
-import { switchModelKeepingVariant } from "../session/model.js";
+import { applySwitch, resolveSwitch } from "../session/model.js";
 
 export function promptRoutes(context: Plugin.Context) {
   return async (request: Request, sessionID: string, operation: string): Promise<Response> => {
     const options = { signal: request.signal };
     if (operation === SessionOperation.Summarize) {
       const input = await body(request, summarizeBody);
-      await switchModelKeepingVariant(
+      const switching = await resolveSwitch(
         context,
         sessionID,
-        { providerID: input.providerID, id: input.modelID },
+        { model: { providerID: input.providerID, id: input.modelID } },
         options,
       );
+      await applySwitch(context, sessionID, switching, options);
       const controller = new AbortController();
       const signal = AbortSignal.any([request.signal, controller.signal]);
       const subscription = context.event.subscribe({
@@ -90,15 +91,19 @@ export function promptRoutes(context: Plugin.Context) {
     const overrides = promptOverrides.parse(input);
     if (input.noReply === true && operation !== SessionOperation.PromptAsync)
       unsupported("synchronous prompt.noReply response");
-    if (input.agent !== undefined)
-      await context.session.switchAgent({ sessionID, agent: input.agent }, options);
-    if (input.model !== undefined)
-      await switchModelKeepingVariant(
-        context,
-        sessionID,
-        { providerID: input.model.providerID, id: input.model.modelID },
-        options,
-      );
+    const switching = await resolveSwitch(
+      context,
+      sessionID,
+      {
+        agent: input.agent,
+        model:
+          input.model === undefined
+            ? undefined
+            : { providerID: input.model.providerID, id: input.model.modelID },
+      },
+      options,
+    );
+    await applySwitch(context, sessionID, switching, options);
     if (input.tools !== undefined) {
       const session = await context.session.get({ sessionID }, options);
       await context.session.update(

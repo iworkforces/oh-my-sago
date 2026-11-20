@@ -2,9 +2,20 @@ import type { Hooks } from "@opencode-ai/plugin";
 import type { Config, Part } from "@opencode-ai/sdk";
 import { Model, type Plugin } from "@opencode/plugin";
 import type { Registration } from "@opencode/plugin/promise/registration";
-import { CompatibilityError } from "./value.js";
+import { CompatibilityError, errorMessage } from "./value.js";
 import { promptInput } from "./prompt.js";
 import { PartKind } from "../enums.js";
+import { applySwitch, resolveSwitch } from "../session/model.js";
+
+/** Parses a command's `model` once; a bad reference fails that command's runs, not registration. */
+function commandModel(name: string, model: string | undefined): Model.Ref | Error | undefined {
+  if (model === undefined || model === "") return undefined;
+  try {
+    return Model.Ref.parse(model);
+  } catch (error) {
+    return new CompatibilityError(`command ${name}: model ${model} (${errorMessage(error)})`);
+  }
+}
 
 export async function registerCommands(
   context: Plugin.Context,
@@ -13,6 +24,7 @@ export async function registerCommands(
 ): Promise<Registration> {
   return context.command.transform((editor) => {
     for (const [name, definition] of Object.entries(config.command ?? {})) {
+      const model = commandModel(name, definition.model);
       editor.add({
         name,
         ...(definition.description === undefined ? {} : { description: definition.description }),
@@ -20,6 +32,11 @@ export async function registerCommands(
           if (definition.subtask === true) throw new CompatibilityError(`command ${name}: subtask`);
           if (/!`|@\{/.test(definition.template))
             throw new CompatibilityError(`command ${name}: shell or file expansion`);
+          if (model instanceof Error) throw model;
+          const switching = await resolveSwitch(context, event.sessionID, {
+            agent: definition.agent === "" ? undefined : definition.agent,
+            model,
+          });
           const argumentsText = event.prompt.text;
           const argumentsList = argumentsText.match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
           const template = definition.template.replace(
@@ -50,22 +67,7 @@ export async function registerCommands(
               return part.text;
             })
             .join("\n");
-          if (definition.agent !== undefined && definition.agent !== "")
-            await context.session.switchAgent({
-              sessionID: event.sessionID,
-              agent: definition.agent,
-            });
-          if (definition.model !== undefined && definition.model !== "") {
-            const model = Model.Ref.parse(definition.model);
-            await context.session.switchModel({
-              sessionID: event.sessionID,
-              model: {
-                id: model.id,
-                providerID: model.providerID,
-                ...(model.variant === undefined ? {} : { variant: model.variant }),
-              },
-            });
-          }
+          await applySwitch(context, event.sessionID, switching);
           await context.session.prompt({
             sessionID: event.sessionID,
             ...promptInput(event.prompt),
