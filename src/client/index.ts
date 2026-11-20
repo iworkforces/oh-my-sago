@@ -188,7 +188,10 @@ function leaseLoopback(directory: string, placeholder: URL): Lease {
       if (!loopback.holders.delete(holder) || loopback.holders.size > 0) return;
       clearTimeout(loopback.expiry);
       loopback.expiry = undefined;
-      if (graceMs <= 0) return await stop();
+      if (graceMs <= 0) {
+        await stop();
+        return;
+      }
       loopback.expiry = setTimeout(() => {
         loopback.expiry = undefined;
         if (loopback.holders.size > 0) return;
