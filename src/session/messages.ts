@@ -13,7 +13,7 @@ import {
   ToolResultKind,
   ToolStateStatus,
 } from "../enums.js";
-import { hideMarkers, showMarkers } from "./markers.js";
+import { hideMarkers, showMarkers, storedMarkers } from "./markers.js";
 import { type Backing, answering, restore, unsupported } from "./message-restore.js";
 
 type RequestMessage = SessionRequest["messages"][number];
@@ -317,19 +317,18 @@ function answerCalls(
 
 const reminderBlock = /<system-reminder>[\s\S]*?<\/system-reminder>/g;
 
-/**
- * Shows the model OmO's internal prompts as written for it: without OmO's markers, and without a
- * `<system-reminder>` block that an earlier user message of the same turn already carries. OmO
- * records a background notice without a reply while its parent looks busy, then sends the same
- * notice to wake the parent; v2 holds the first in the session inbox until that wake, so both reach
- * the model side by side. A message left empty is dropped. A reminder repeated after an assistant
- * reply is kept, since that repeat is deliberate.
- */
-export function cleanInternalPrompts(messages: readonly RequestMessage[]): RequestMessage[] {
-  let seen = new Set<string>();
-  return messages.flatMap((native): RequestMessage[] => {
-    if (native.role === MessageRole.Assistant) seen = new Set();
+function cleanTurn(
+  turn: readonly RequestMessage[],
+  shown: ReadonlySet<string>,
+): { messages: RequestMessage[]; kept: ReadonlySet<string> } {
+  const kept = new Set<string>();
+  const messages = turn.flatMap((native): RequestMessage[] => {
     if (native.role !== MessageRole.User) return [native];
+    const fromOmO =
+      storedMarkers(native.metadata).length > 0 ||
+      native.content.some(
+        (part) => part.type === ContentKind.Text && hideMarkers(part.text).markers.length > 0,
+      );
     let changed = false;
     const content = native.content.flatMap((part): (typeof native.content)[number][] => {
       if (part.type !== ContentKind.Text) return [part];
@@ -337,8 +336,8 @@ export function cleanInternalPrompts(messages: readonly RequestMessage[]): Reque
       let removed = markers.length > 0;
       const cleaned = unmarked
         .replace(reminderBlock, (block) => {
-          if (!seen.has(block)) {
-            seen.add(block);
+          if (!kept.has(block) && !(fromOmO && shown.has(block))) {
+            kept.add(block);
             return block;
           }
           removed = true;
@@ -351,6 +350,31 @@ export function cleanInternalPrompts(messages: readonly RequestMessage[]): Reque
     });
     if (!changed) return [native];
     return content.length === 0 ? [] : [{ ...nativeFields(native), role: native.role, content }];
+  });
+  return { messages, kept };
+}
+
+const prompting = (native: RequestMessage): boolean => native.role !== MessageRole.Assistant;
+
+/**
+ * Shows the model OmO's internal prompts as written for it: without OmO's markers, and without a
+ * `<system-reminder>` block the model was already shown. OmO records a background notice without a
+ * reply while its parent looks busy, then sends the same notice to wake the parent; v2 holds the
+ * first in the session inbox until that wake, so both reach the model side by side. OmO also sends a
+ * notice again, merged with any newer one, when no assistant output shows up within seconds of the
+ * first send, although the model may have read and answered it by then. So a block is dropped when
+ * an earlier user message of its turn carries it, or when OmO repeats it from an earlier turn; a
+ * user's own message keeps what it quotes. A message left empty is dropped, unless that leaves its
+ * turn with nothing to answer: OmO is then asking with the repeat alone, and the turn keeps it.
+ */
+export function cleanInternalPrompts(messages: readonly RequestMessage[]): RequestMessage[] {
+  const shown = new Set<string>();
+  return splitTurns(messages).flatMap((turn) => {
+    let cleaned = cleanTurn(turn, shown);
+    if (turn.some(prompting) && !cleaned.messages.some(prompting))
+      cleaned = cleanTurn(turn, new Set());
+    for (const block of cleaned.kept) shown.add(block);
+    return cleaned.messages;
   });
 }
 
