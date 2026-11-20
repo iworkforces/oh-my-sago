@@ -53,12 +53,40 @@ await Bun.write(
 const sources = ["./provider-plugin/", "./omsago-plugin/"].map((path) =>
   fileURLToPath(new URL(path, import.meta.url)),
 );
-await using host = await cliHost(directory, sources);
+// OmO registers its own default agent and allows webfetch and external directories; yours win.
+// OmO turns build and plan into hidden subagents, so the default names an agent of your own.
+const defaultAgent = "omsago-own";
+const deniedDirectory = "/omsago-denied/**";
+await using host = await cliHost(directory, sources, {
+  agent: { [defaultAgent]: { mode: "primary", description: "The user's own default agent" } },
+  default_agent: defaultAgent,
+  permission: { webfetch: "deny", external_directory: { [deniedDirectory]: "deny" } },
+});
 await host.request("/api/model");
 const plugins = await host.request("/api/plugin");
 const agents = z
-  .object({ data: z.array(z.object({ id: z.string(), system: z.string().optional() })) })
+  .object({
+    data: z.array(
+      z.object({
+        id: z.string(),
+        system: z.string().optional(),
+        permissions: z.array(
+          z.object({ action: z.string(), resource: z.string(), effect: z.string() }),
+        ),
+      }),
+    ),
+  })
   .parse(await host.request("/api/agent")).data;
+assert.equal(agents[0]?.id, defaultAgent, JSON.stringify(agents.map((agent) => agent.id)));
+for (const agent of agents) {
+  const last = (action: string) => agent.permissions.findLast((rule) => rule.action === action);
+  assert.equal(last("webfetch")?.effect, "deny", JSON.stringify(agent));
+  assert.deepEqual(
+    last("external_directory"),
+    { action: "external_directory", resource: deniedDirectory, effect: "deny" },
+    JSON.stringify(agent),
+  );
+}
 assert.ok(
   agents.some(
     (agent) => agent.id.toLowerCase().includes("sisyphus") && (agent.system?.length ?? 0) > 100,
