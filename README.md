@@ -51,6 +51,10 @@ with OpenCode v2; the bridge does not implement another authentication system.
 - A generated legacy SDK client routes discovery, session operations, prompts,
   cancellation, status, messages, and compaction to native v2 APIs. Native events
   are translated for OmO's existing managers.
+- OpenCode starts one plugin instance, and so one OmO runtime, per directory, but
+  publishes every directory's session events on one bus. Each instance translates
+  only its own directory's sessions, so one finished turn produces one
+  `session.idle` and at most one todo-continuation countdown and prompt.
 
 The native CLI integration suite exercises a real OmO agent turn and skill,
 protected writes, synchronous delegation, background completion and failure,
