@@ -10,6 +10,7 @@ test("the legacy client preserves discovery envelopes, session lifecycle, pagina
     notFound: "passed",
     pagination: "passed",
     cursorCycle: "passed",
+    invalidReleaseDate: "passed",
     turns: "passed",
     errors: "passed",
     cancellation: "passed",
