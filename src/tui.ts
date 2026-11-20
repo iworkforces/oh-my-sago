@@ -11,21 +11,24 @@ export default Plugin.define({
         duration: 5000,
       });
     };
-    const created = context.data.on("session.created", toast);
-    const succeeded = context.data.on("session.execution.succeeded", toast);
-    const forwarded = context.client.rpc(toastRpc).events.on("toast", (event) => {
-      const { title, message, variant, duration } = event.data;
-      context.ui.toast.show({
-        ...(title === undefined ? {} : { title }),
-        message,
-        variant,
-        ...(duration === undefined ? {} : { duration }),
-      });
-    });
+    // A registration that throws unwinds the listeners before it, and the host sees the error.
+    using stack = new DisposableStack();
+    stack.defer(context.data.on("session.created", toast));
+    stack.defer(context.data.on("session.execution.succeeded", toast));
+    stack.defer(
+      context.client.rpc(toastRpc).events.on("toast", (event) => {
+        const { title, message, variant, duration } = event.data;
+        context.ui.toast.show({
+          ...(title === undefined ? {} : { title }),
+          message,
+          variant,
+          ...(duration === undefined ? {} : { duration }),
+        });
+      }),
+    );
+    const owned = stack.move();
     return () => {
-      created();
-      succeeded();
-      forwarded();
+      owned.dispose();
     };
   },
 });
