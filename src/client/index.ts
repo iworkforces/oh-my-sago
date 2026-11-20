@@ -25,9 +25,43 @@ export type ClientBridge = {
   readonly start: (hooks: LegacyEventSink) => Promise<void>;
   /** Stops event delivery while the legacy client keeps answering requests. */
   readonly stop: () => Promise<void>;
-  /** Stops event delivery and fails every later legacy client request; idempotent. */
+  /**
+   * Stops event delivery and OmO's loopback listener, and fails every later legacy client request;
+   * idempotent.
+   */
   readonly close: () => Promise<void>;
 };
+
+type Listener = { readonly url: URL; readonly stop: () => Promise<void> };
+
+/**
+ * OmO lists sessions through its own global-fetch client on `serverUrl` and uses the plugin client
+ * only when that one reports NotFoundError, so it gets a loopback listener that answers every
+ * request that way. Its /global/health probes read the 404 as no server running.
+ */
+function notFoundListener(placeholder: URL): Listener {
+  let server: ReturnType<typeof Bun.serve>;
+  try {
+    server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: () =>
+        errorResponse(new BridgeError(404, "omsago serves sessions through the plugin client")),
+    });
+  } catch (error) {
+    console.warn("omsago: OmO session tools fall back to the placeholder serverUrl", error);
+    return { url: placeholder, stop: () => Promise.resolve() };
+  }
+  server.unref();
+  let stopped: Promise<void> | undefined;
+  return {
+    url: server.url,
+    stop: () => {
+      stopped ??= server.stop(true);
+      return stopped;
+    },
+  };
+}
 
 export function createClientBridge(context: Plugin.Context, toasts: ToastEmitter): ClientBridge {
   const sessionState = new ClientSessionState();
@@ -44,11 +78,12 @@ export function createClientBridge(context: Plugin.Context, toasts: ToastEmitter
     }
     return Response.json(true);
   };
-  const serverUrl = new URL("http://omsago.invalid");
+  const internalUrl = new URL("http://omsago.invalid");
+  const listener = notFoundListener(internalUrl);
   const route = async (request: Request): Promise<Response> => {
     try {
       const url = new URL(request.url);
-      if (url.origin !== serverUrl.origin)
+      if (url.origin !== internalUrl.origin)
         throw new BridgeError(400, "The client bridge cannot route a foreign origin");
       const path = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
       if (path[0] === "session") return await sessions(request, path);
@@ -78,7 +113,7 @@ export function createClientBridge(context: Plugin.Context, toasts: ToastEmitter
     return raceAbort(request.signal, route(request));
   };
   const config = {
-    baseUrl: serverUrl.href,
+    baseUrl: internalUrl.href,
     directory: context.location.directory,
     fetch: Object.assign(transport, {
       preconnect() {
@@ -94,7 +129,7 @@ export function createClientBridge(context: Plugin.Context, toasts: ToastEmitter
     project: currentProject(context),
     directory: context.location.directory,
     worktree: context.location.project.directory,
-    serverUrl,
+    serverUrl: listener.url,
     $,
     experimental_workspace: {
       register(_type: string, _adapter: WorkspaceAdapter) {
@@ -112,6 +147,7 @@ export function createClientBridge(context: Plugin.Context, toasts: ToastEmitter
     },
     close: async () => {
       closed = true;
+      await listener.stop();
       await events.stop();
       retries.stop();
     },
