@@ -16,6 +16,16 @@ export const idleOf =
   (event) =>
     event.type === LegacyEventType.SessionIdle && event.properties.sessionID === sessionID;
 
+export const compactionOf =
+  (
+    type:
+      | typeof LegacyEventType.SessionCompactionStarted
+      | typeof LegacyEventType.SessionCompactionFailed,
+    sessionID: string,
+  ): Match =>
+  (event) =>
+    event.type === type && event.properties.sessionID === sessionID;
+
 export class EventLog {
   readonly #events: LegacyEvent[] = [];
   readonly #waiters = new Set<{ readonly match: Match; readonly resolve: () => void }>();
