@@ -6,7 +6,7 @@ import { z } from "zod";
 export class CompatibilityError extends Error {
   readonly feature: string;
   constructor(feature: string) {
-    super(`Legacy configuration is not supported by OpenCode 2.3.0: ${feature}`);
+    super(`Legacy configuration is not supported by OpenCode v2: ${feature}`);
     this.name = ErrorName.Compatibility;
     this.feature = feature;
   }
