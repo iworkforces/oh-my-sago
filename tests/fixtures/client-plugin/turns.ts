@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import type { OpenCodeEvent } from "@opencode/client";
 import type { Plugin } from "@opencode/plugin";
+import type { Rpc } from "@opencode/schema/rpc";
 import type { LegacyEvent } from "../../../src/client/events.js";
 import { createClientBridge } from "../../../src/client/index.js";
 import { IdleHolds, isBusy } from "../../../src/client/sessions.js";
@@ -45,7 +46,9 @@ type Scenario =
   | "idleHoldGoal"
   | "idleHoldUnmanaged"
   | "idleHoldYoung"
-  | "parentNotice";
+  | "idleHoldGoalless"
+  | "parentNotice"
+  | "repeatedNotice";
 
 /**
  * Relays a subscription, slipping in a `session.compaction.ended` that no compaction of ours
@@ -562,12 +565,19 @@ export async function verifyTurns(
     assert.ok(child.data, JSON.stringify(child.error));
     return { parent: parent.id, child: child.data.id };
   };
-  const notice = "[BACKGROUND TASK COMPLETED] CLIENT_NOTICE";
+  const notice =
+    "<system-reminder>\n[BACKGROUND TASK COMPLETED]\n[ALL BACKGROUND TASKS COMPLETE]\n\nCLIENT_NOTICE\n</system-reminder>";
+  const resultReady =
+    "<system-reminder>\n[BACKGROUND TASK RESULT READY]\n**ID:** `bg_client`\n\n**1 task still in progress.**\n</system-reminder>";
   /** Acts as OmO on a held idle: completes the task by aborting the child, then notifies. */
-  const notify = async ({ parent, child }: { parent: string; child: string }) => {
+  const notify = async (
+    { parent, child }: { parent: string; child: string },
+    beforeNotice?: () => Promise<void>,
+  ) => {
     assert.ok(isBusy(await context.session.get({ sessionID: child })), "the child's turn is held");
     assert.equal((await client.session.status()).data?.[child]?.type, SessionStatusKind.Idle);
     assert.equal((await client.session.abort({ path: { id: child } })).data, false);
+    await beforeNotice?.();
     const notified = await client.session.promptAsync({
       path: { id: parent },
       body: { noReply: true, parts: text(notice) },
@@ -600,7 +610,14 @@ export async function verifyTurns(
   });
   assert.equal(childTurn.response.status, 204);
   await log.until(idleOf(heldChild.child), "a held child's idle", holding);
-  await notify(heldChild);
+  // Another prompt reaching the parent leaves the claimed child held for OmO's notice.
+  await notify(heldChild, async () => {
+    await client.session.promptAsync({
+      path: { id: heldChild.parent },
+      body: { noReply: true, parts: text("CLIENT_MONITOR") },
+    });
+    assert.ok(isBusy(await context.session.get({ sessionID: heldChild.child })), "still held");
+  });
   await log.until(idleOf(heldChild.parent), "the parent's turn on a notice and report", holding);
   const parentRecords = await context.session.context({ sessionID: heldChild.parent });
   const noticeAt = parentRecords.findIndex(
@@ -670,6 +687,54 @@ export async function verifyTurns(
   await log.until(idleOf(goaled.parent), "the parent's turn after a goal child", goalNotice);
   assert.equal((await reports(goaled)).length, 1);
 
+  // Without OpenCode's goal plugin no goal runs a child's turn on, so the child is held as usual.
+  const goalless = createClientBridge(
+    {
+      ...context,
+      rpc: Object.assign(
+        <D extends Rpc.PortableDefinition>(definition: D) =>
+          context.rpc(
+            definition.id === "opencode.goal"
+              ? { ...definition, id: "omsago.fixture.goal" }
+              : definition,
+          ),
+        { register: context.rpc.register },
+      ),
+    },
+    { emit: () => Promise.resolve() },
+    { idleHold: { claimMs: 60_000, notifyMs: 60_000 } },
+  );
+  const goallessLog = new EventLog();
+  await goalless.start(goallessLog.sink);
+  try {
+    const goallessClient = goalless.input.client;
+    const goallessParent = await goallessClient.session.create({
+      body: { title: "client goalless parent" },
+    });
+    assert.ok(goallessParent.data, JSON.stringify(goallessParent.error));
+    const goallessChild = await goallessClient.session.create({
+      body: { parentID: goallessParent.data.id, title: "client goalless child" },
+    });
+    assert.ok(goallessChild.data, JSON.stringify(goallessChild.error));
+    const lone = { parent: goallessParent.data.id, child: goallessChild.data.id };
+    const unpursued = goallessLog.mark();
+    await goallessClient.session.promptAsync({
+      path: { id: lone.child },
+      body: { parts: text("CLIENT_IDLE_HOLD") },
+    });
+    await goallessLog.until(idleOf(lone.child), "a held idle without goals", unpursued);
+    assert.ok(isBusy(await context.session.get({ sessionID: lone.child })), "the turn is held");
+    assert.equal((await goallessClient.session.abort({ path: { id: lone.child } })).data, false);
+    await goallessClient.session.promptAsync({
+      path: { id: lone.parent },
+      body: { noReply: true, parts: text(notice) },
+    });
+    await goallessLog.until(idleOf(lone.parent), "the parent's turn without goals", unpursued);
+    assert.equal((await reports(lone)).length, 1);
+  } finally {
+    await goalless.close();
+  }
+
   // A child OmO did not create ends its turn as usual, and OpenCode's report wakes the parent.
   const stranger = await create();
   const { id: strayChild } = await context.session.create({
@@ -712,6 +777,15 @@ export async function verifyTurns(
   assert.equal(await parentStatus(), SessionStatusKind.Busy);
   assert.equal((await client.session.abort({ path: { id: busy.child } })).data, false);
   assert.equal(await parentStatus(), SessionStatusKind.Idle);
+  // Another prompt, or OmO's notice of one task while another runs, leaves it idle for the last.
+  for (const interim of ["CLIENT_MONITOR", resultReady]) {
+    const admitted = await client.session.promptAsync({
+      path: { id: busy.parent },
+      body: { noReply: true, parts: text(interim) },
+    });
+    assert.equal(admitted.response.status, 204);
+    assert.equal(await parentStatus(), SessionStatusKind.Idle);
+  }
   const noticed = await client.session.promptAsync({
     path: { id: busy.parent },
     body: { noReply: true, parts: text(notice) },
@@ -728,6 +802,41 @@ export async function verifyTurns(
     JSON.stringify(busyRecords),
   );
   assert.equal((await reports(busy)).length, 1);
+
+  // OmO records a notice without a reply while the parent looks busy, then sends it again to wake
+  // the parent, possibly after another prompt without a reply. The repeat wakes the parent for the
+  // waiting notice, which is recorded once.
+  const repeated = await create();
+  const noticeRecords = async () =>
+    (await context.session.context({ sessionID: repeated.id })).filter(
+      (record) => record.type === RecordType.User && record.text.includes("CLIENT_NOTICE"),
+    ).length;
+  const repeating = log.mark();
+  for (const [noReply, promptText] of [
+    [true, notice],
+    [true, "CLIENT_MONITOR"],
+    [false, notice],
+  ] as const) {
+    const sent = await client.session.promptAsync({
+      path: { id: repeated.id },
+      body: { noReply, parts: text(promptText) },
+    });
+    assert.equal(sent.response.status, 204);
+  }
+  await log.until(idleOf(repeated.id), "the parent's turn on a repeated notice", repeating);
+  assert.equal(await noticeRecords(), 1);
+  // A notice another wake already took in comes again as a new prompt, which runs a new turn.
+  const rewoken = log.mark();
+  await client.session.promptAsync({
+    path: { id: repeated.id },
+    body: { noReply: true, parts: text(notice) },
+  });
+  await context.session.prompt({ sessionID: repeated.id, text: "CLIENT_WAKE" });
+  await log.until(idleOf(repeated.id), "the parent's turn on another wake", rewoken);
+  const resent = log.mark();
+  await client.session.promptAsync({ path: { id: repeated.id }, body: { parts: text(notice) } });
+  await log.until(idleOf(repeated.id), "the parent's turn on a notice sent again", resent);
+  assert.equal(await noticeRecords(), 3);
 
   // Without OmO's claim or notice, a held turn ends at its bound.
   const bounded = new IdleHolds({ claimMs: 1, notifyMs: 1, minTaskMs: 0 });
@@ -770,6 +879,8 @@ export async function verifyTurns(
     idleHoldGoal: "passed",
     idleHoldUnmanaged: "passed",
     idleHoldYoung: "passed",
+    idleHoldGoalless: "passed",
     parentNotice: "passed",
+    repeatedNotice: "passed",
   } as const;
 }
