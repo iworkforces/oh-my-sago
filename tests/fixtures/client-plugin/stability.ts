@@ -7,7 +7,12 @@ import { z } from "zod";
 import { BridgeError } from "../../../src/client/errors.js";
 import { clientEvents } from "../../../src/client/events.js";
 import { createClientBridge } from "../../../src/client/index.js";
-import { BackgroundWaits, type RetryStatus, SessionRetries } from "../../../src/client/sessions.js";
+import {
+  BackgroundWaits,
+  IdleHolds,
+  type RetryStatus,
+  SessionRetries,
+} from "../../../src/client/sessions.js";
 import { sessionRoutes } from "../../../src/client/session-routes.js";
 import { ClientSessionState } from "../../../src/client/state.js";
 import {
@@ -189,6 +194,7 @@ export async function verifyTodoFailure(
     failing,
     new SessionRetries(),
     new BackgroundWaits(),
+    new IdleHolds(),
     new ClientSessionState(),
   );
   await using cleanup = new AsyncDisposableStack();
@@ -236,7 +242,7 @@ export async function verifyStability(
   const { log, held } = holdingLog();
   const retries = new SessionRetries();
   const state = new ClientSessionState();
-  const events = clientEvents(flaky, retries, new BackgroundWaits(), state);
+  const events = clientEvents(flaky, retries, new BackgroundWaits(), new IdleHolds(), state);
   await using cleanup = new AsyncDisposableStack();
   cleanup.defer(() => events.stop());
 
@@ -366,6 +372,7 @@ export async function verifyLocationScope(
     scoped,
     new SessionRetries(),
     new BackgroundWaits(),
+    new IdleHolds(),
     new ClientSessionState(),
   );
   await using cleanup = new AsyncDisposableStack();
@@ -454,6 +461,7 @@ export async function verifyStop(
     context,
     new SessionRetries(),
     new BackgroundWaits(),
+    new IdleHolds(),
     new ClientSessionState(),
     {
       stopMs: 50,
@@ -501,6 +509,7 @@ export async function verifyStop(
     unlisted,
     new SessionRetries(),
     new BackgroundWaits(),
+    new IdleHolds(),
     new ClientSessionState(),
     {
       startMs: 50,
@@ -518,6 +527,7 @@ export async function verifyStop(
     flaky,
     new SessionRetries(),
     new BackgroundWaits(),
+    new IdleHolds(),
     new ClientSessionState(),
     {
       stopMs: 60_000,
@@ -658,7 +668,7 @@ export async function verifyLifecycle(
 
   const retries = new SessionRetries();
   const state = new ClientSessionState();
-  const events = clientEvents(context, retries, new BackgroundWaits(), state);
+  const events = clientEvents(context, retries, new BackgroundWaits(), new IdleHolds(), state);
   cleanup.defer(() => events.stop());
   const log = new EventLog();
   await events.start(log.sink);
@@ -679,7 +689,13 @@ export async function verifyLifecycle(
 
   const routeRetries = new SessionRetries();
   const routeState = new ClientSessionState();
-  const routes = sessionRoutes(context, routeState, routeRetries, new BackgroundWaits());
+  const routes = sessionRoutes(
+    context,
+    routeState,
+    routeRetries,
+    new BackgroundWaits(),
+    new IdleHolds(),
+  );
   const routed = await createSession(bridge, "deleted by route");
   await remember(routeState, routeRetries, routed);
   const response = await routes(
