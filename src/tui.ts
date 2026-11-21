@@ -1,7 +1,7 @@
 import { Plugin } from "@opencode/plugin/tui";
 import { toastRpc } from "./toast.js";
 
-export default Plugin.define({
+const plugin: Plugin.Definition = Plugin.define({
   id: "omsago",
   setup(context) {
     // Naming the session lets the host title a toast from a session that is not open and offer it.
@@ -35,3 +35,5 @@ export default Plugin.define({
     };
   },
 });
+
+export default plugin;

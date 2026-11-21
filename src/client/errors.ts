@@ -1,7 +1,7 @@
 import { ErrorName } from "../enums.js";
 
 export class BridgeError extends Error {
-  override readonly name = ErrorName.Bridge;
+  override readonly name: typeof ErrorName.Bridge = ErrorName.Bridge;
   readonly status: number;
   constructor(status: number, message: string) {
     super(message);

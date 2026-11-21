@@ -16,9 +16,9 @@ export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-export const json = z.json();
+export const json: z.ZodJSONSchema = z.json();
 export type Json = z.infer<typeof json>;
-export const jsonRecord = z.record(z.string(), json);
+export const jsonRecord: z.ZodRecord<z.ZodString, z.ZodJSONSchema> = z.record(z.string(), json);
 export type JsonRecord = z.infer<typeof jsonRecord>;
 
 export function metadata(value: object | undefined): JsonRecord {
