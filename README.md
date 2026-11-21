@@ -154,11 +154,14 @@ configuration. Put the equivalent setting in OmO's own configuration when you
 want OmO itself to follow it.
 
 OmO's toasts carry no session, so omsago names the session whose OmO hook
-requested one, and the TUI shows a toast from a session that is not open with
-that session's title or an offer to open it. A toast from OmO work that outlives
-the hook which started it, such as a timer or a background-task poller, names no
-session: one OmO poller serves every session's background tasks, so its toasts
-cannot be traced to the right one.
+requested one, and the TUI shows a toast that names a session only while that
+session or another session of its family is open. A toast from a session in the
+background, or one that arrives while no session is open, is dropped instead of
+showing in the session you are working in. omsago's own toast on a new or
+finished session follows the same rule. A toast from OmO work that outlives the
+hook which started it, such as a timer or a background-task poller, names no
+session and shows whatever is open: one OmO poller serves every session's
+background tasks, so its toasts cannot be traced to the right one.
 
 OmO keeps some clients in module-level state that the most recently started
 instance replaces, including the client behind its session tools and its
