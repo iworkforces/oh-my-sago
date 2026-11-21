@@ -4,8 +4,16 @@ import { toastRpc } from "./toast.js";
 const plugin: Plugin.Definition = Plugin.define({
   id: "omsago",
   setup(context) {
-    // Naming the session lets the host title a toast from a session that is not open and offer it.
+    // A toast that names a session belongs to that session's family, so it shows only while that family is open.
+    const open = (sessionID: string): boolean => {
+      const route = context.ui.router.current();
+      return (
+        route.type === "session" &&
+        context.data.session.root(route.sessionID) === context.data.session.root(sessionID)
+      );
+    };
     const toast = (event: { readonly data: { readonly sessionID: string } }): void => {
+      if (!open(event.data.sessionID)) return;
       context.ui.toast.show({
         message: "Sago is now on Steroids, oMoMoMoMo...",
         variant: "success",
@@ -20,6 +28,7 @@ const plugin: Plugin.Definition = Plugin.define({
     stack.defer(
       context.client.rpc(toastRpc).events.on("toast", (event) => {
         const { title, message, variant, duration, sessionID } = event.data;
+        if (sessionID !== undefined && !open(sessionID)) return;
         context.ui.toast.show({
           ...(title === undefined ? {} : { title }),
           message,

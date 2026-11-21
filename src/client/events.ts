@@ -88,6 +88,8 @@ const goalRpc = Rpc.define({
   },
   events: {},
 });
+/** OpenCode's answer to a call no plugin serves, as when its `/goal` plugin is disabled. */
+const unavailableRpc = z.object({ type: z.literal("rpc.unavailable") });
 
 /** Delay before resubscribing after the native stream fails or ends, doubled per failed attempt. */
 const reconnectDelay = { initialMs: 100, maxMs: 5_000 } as const;
@@ -689,16 +691,41 @@ export function clientEvents(
        * loop announce that idle at once; see `IdleHolds`. Never rejects, since a failing idle hook
        * fails the child's execution.
        */
+      let goalUnread = false;
+      /**
+       * Whether a goal may run the child's turn on from its own idle hook, which this hook cannot
+       * see. Without OpenCode's goal plugin no goal runs. A goal that cannot be read may, and the
+       * first of such failures in a row is logged.
+       */
+      const goalMayRunOn = async (sessionID: string): Promise<boolean> => {
+        try {
+          const goal = await raceAbort(signal, context.rpc(goalRpc).get({ sessionID }, options));
+          goalUnread = false;
+          return goal?.status === GoalStatus.Active;
+        } catch (error) {
+          if (stopped(error)) throw error;
+          if (unavailableRpc.safeParse(error).success) return false;
+          if (!goalUnread)
+            console.error(
+              "Client bridge could not read a child's goal, so it does not hold idles",
+              {
+                sessionID,
+                error,
+              },
+            );
+          goalUnread = true;
+          return true;
+        }
+      };
       const hold = async (sessionID: string): Promise<void> => {
         const parentID = holds.parentOf(sessionID);
         if (parentID === undefined || waits.has(sessionID)) return;
         try {
           const [parent, goal] = await Promise.all([
             raceAbort(signal, context.session.get({ sessionID: parentID }, options)),
-            raceAbort(signal, context.rpc(goalRpc).get({ sessionID }, options)),
+            goalMayRunOn(sessionID),
           ]);
-          // An active goal's own idle hook may run the turn on, which this hook cannot see.
-          if (goal?.status === GoalStatus.Active) return;
+          if (goal) return;
           if (!owns(parent) || isBusy(parent) || waits.has(parentID)) return;
           const held = holds.park(sessionID);
           enqueue({ early: sessionID });

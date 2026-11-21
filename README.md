@@ -67,23 +67,32 @@ with OpenCode v2; the bridge does not implement another authentication system.
   session that OmO created goes idle while its parent is idle, omsago sends OmO
   the child's `session.idle` and `idle` status first and holds the child's turn
   open. OmO completes the task by aborting the child, which answers `false` and
-  leaves the turn alone, then prompts the parent with its notice. That prompt
-  ends the hold, so the parent wakes to OmO's notice with OpenCode's report right
-  behind it. If OmO does not abort the child within 1 second of that idle, or
-  does not prompt the parent within 3 seconds of the abort, the turn ends as
-  usual. OmO reads the idle of a task younger than 5 seconds only once the task
-  is 5 seconds old, so for such a task the 1 second starts then. Input that
-  reaches the held child continues the same turn, and the child reports busy
-  again. A child with an active `/goal` is not held, because the goal can
-  continue its turn.
+  leaves the turn alone, then prompts the parent with its notice. That prompt,
+  and no other prompt to the parent, ends the hold, so the parent wakes to OmO's
+  notice with OpenCode's report right behind it. If OmO does not abort the child
+  within 1 second of that idle, or does not prompt the parent within 3 seconds
+  of the abort, the turn ends as usual. OmO reads the idle of a task younger
+  than 5 seconds only once the task is 5 seconds old, so for such a task the 1
+  second starts then. Input that reaches the held child continues the same turn,
+  and the child reports busy again. A child with an active `/goal` is not held,
+  because the goal can continue its turn. Without OpenCode's goal plugin,
+  children are held as usual. A child whose goal cannot be read is not held,
+  and omsago logs the first of such failures in a row.
 - When OmO aborts a child it created while the child's root parent is busy, the
-  parent reports `idle` to OmO until OmO's notice reaches it, for up to 3
-  seconds. OmO then sends the notice at once instead of waiting for the parent's
-  turn to end, and OpenCode steers it into that turn. This also covers a child
-  that finishes while its parent is busy with another child's report. An abort
-  from the parent's own work, such as a synchronous `task` collecting its
-  result, leaves the parent's status alone, and a parent still running its own
-  background work keeps reporting busy.
+  parent reports `idle` to OmO until OmO's last notice reaches it, the one OmO
+  sends once none of the parent's tasks still runs, for up to 3 seconds. Other
+  prompts to the parent, and a notice of one task while another still runs,
+  leave it reporting `idle`. OmO then sends the notice at once instead of
+  waiting for the parent's turn to end, and OpenCode steers it into that turn.
+  This also covers a child that finishes while its parent is busy with another
+  child's report. An abort from the parent's own work, such as a synchronous
+  `task` collecting its result, leaves the parent's status alone, and a parent
+  still running its own background work keeps reporting busy.
+- OmO records a background notice without a reply while the parent looks busy,
+  then sends the same notice again to wake the parent, possibly after other
+  prompts without a reply. OpenCode keeps each such prompt in the session inbox
+  until the session wakes, so omsago wakes the parent for the waiting notice
+  instead of admitting a second copy, and the notice is recorded once.
 - OpenCode also reports the children of OmO's synchronous `task` and `look_at`,
   whose tool result already gave the parent the child's answer. omsago leaves
   such a report out of the parent's model requests, unless it alone started the
@@ -154,11 +163,14 @@ configuration. Put the equivalent setting in OmO's own configuration when you
 want OmO itself to follow it.
 
 OmO's toasts carry no session, so omsago names the session whose OmO hook
-requested one, and the TUI shows a toast from a session that is not open with
-that session's title or an offer to open it. A toast from OmO work that outlives
-the hook which started it, such as a timer or a background-task poller, names no
-session: one OmO poller serves every session's background tasks, so its toasts
-cannot be traced to the right one.
+requested one, and the TUI shows a toast that names a session only while that
+session or another session of its family is open. A toast from a session in the
+background, or one that arrives while no session is open, is dropped instead of
+showing in the session you are working in. omsago's own toast on a new or
+finished session follows the same rule. A toast from OmO work that outlives the
+hook which started it, such as a timer or a background-task poller, names no
+session and shows whatever is open: one OmO poller serves every session's
+background tasks, so its toasts cannot be traced to the right one.
 
 OmO keeps some clients in module-level state that the most recently started
 instance replaces, including the client behind its session tools and its
