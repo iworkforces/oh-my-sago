@@ -32,7 +32,19 @@ import type {
  * with `assertNever` rejects a union member this module has not named.
  */
 
-export const RecordType = {
+export const RecordType: {
+  readonly AgentSwitched: "agent-switched";
+  readonly ModelSwitched: "model-switched";
+  readonly LocationSwitched: "location-switched";
+  readonly User: "user";
+  readonly Synthetic: "synthetic";
+  readonly System: "system";
+  readonly Skill: "skill";
+  readonly Shell: "shell";
+  readonly Assistant: "assistant";
+  readonly Compaction: "compaction";
+  readonly Idle: "idle";
+} = {
   AgentSwitched: "agent-switched",
   ModelSwitched: "model-switched",
   LocationSwitched: "location-switched",
@@ -47,7 +59,12 @@ export const RecordType = {
 } as const satisfies Record<string, SessionMessageInfo["type"]>;
 export type RecordType = (typeof RecordType)[keyof typeof RecordType];
 
-export const MessageRole = {
+export const MessageRole: {
+  readonly System: "system";
+  readonly User: "user";
+  readonly Assistant: "assistant";
+  readonly Tool: "tool";
+} = {
   System: "system",
   User: "user",
   Assistant: "assistant",
@@ -55,7 +72,15 @@ export const MessageRole = {
 } as const satisfies Record<string, SessionRequest["messages"][number]["role"]>;
 export type MessageRole = (typeof MessageRole)[keyof typeof MessageRole];
 
-export const ContentKind = {
+export const ContentKind: {
+  readonly Text: "text";
+  readonly Reasoning: "reasoning";
+  readonly Media: "media";
+  readonly ToolCall: "tool-call";
+  readonly ToolResult: "tool-result";
+  readonly Compaction: "compaction";
+  readonly Effort: "effort";
+} = {
   Text: "text",
   Reasoning: "reasoning",
   Media: "media",
@@ -66,7 +91,20 @@ export const ContentKind = {
 } as const satisfies Record<string, ContentPart["type"]>;
 export type ContentKind = (typeof ContentKind)[keyof typeof ContentKind];
 
-export const PartKind = {
+export const PartKind: {
+  readonly Text: "text";
+  readonly Reasoning: "reasoning";
+  readonly File: "file";
+  readonly Tool: "tool";
+  readonly StepStart: "step-start";
+  readonly StepFinish: "step-finish";
+  readonly Snapshot: "snapshot";
+  readonly Patch: "patch";
+  readonly Agent: "agent";
+  readonly Retry: "retry";
+  readonly Compaction: "compaction";
+  readonly Subtask: "subtask";
+} = {
   Text: "text",
   Reasoning: "reasoning",
   File: "file",
@@ -86,13 +124,21 @@ type ToolContentType = Extract<
   ToolResultPart["result"],
   { type: "content" }
 >["value"][number]["type"];
-export const ToolContentKind = {
+export const ToolContentKind: {
+  readonly Text: "text";
+  readonly File: "file";
+} = {
   Text: "text",
   File: "file",
 } as const satisfies Record<string, ToolContentType>;
 export type ToolContentKind = (typeof ToolContentKind)[keyof typeof ToolContentKind];
 
-export const ToolResultKind = {
+export const ToolResultKind: {
+  readonly Error: "error";
+  readonly Text: "text";
+  readonly Json: "json";
+  readonly Content: "content";
+} = {
   Error: "error",
   Text: "text",
   Json: "json",
@@ -100,7 +146,12 @@ export const ToolResultKind = {
 } as const satisfies Record<string, ToolResultPart["result"]["type"]>;
 export type ToolResultKind = (typeof ToolResultKind)[keyof typeof ToolResultKind];
 
-export const ToolStateStatus = {
+export const ToolStateStatus: {
+  readonly Pending: "pending";
+  readonly Running: "running";
+  readonly Completed: "completed";
+  readonly Error: "error";
+} = {
   Pending: "pending",
   Running: "running",
   Completed: "completed",
@@ -108,7 +159,12 @@ export const ToolStateStatus = {
 } as const satisfies Record<string, ToolPart["state"]["status"]>;
 export type ToolStateStatus = (typeof ToolStateStatus)[keyof typeof ToolStateStatus];
 
-export const ToolRunStatus = {
+export const ToolRunStatus: {
+  readonly Streaming: "streaming";
+  readonly Running: "running";
+  readonly Completed: "completed";
+  readonly Error: "error";
+} = {
   Streaming: "streaming",
   Running: "running",
   Completed: "completed",
@@ -116,14 +172,22 @@ export const ToolRunStatus = {
 } as const satisfies Record<string, SessionMessageAssistantTool["state"]["status"]>;
 export type ToolRunStatus = (typeof ToolRunStatus)[keyof typeof ToolRunStatus];
 
-export const AssistantContentKind = {
+export const AssistantContentKind: {
+  readonly Text: "text";
+  readonly Reasoning: "reasoning";
+  readonly Tool: "tool";
+} = {
   Text: "text",
   Reasoning: "reasoning",
   Tool: "tool",
 } as const satisfies Record<string, SessionMessageAssistant["content"][number]["type"]>;
 export type AssistantContentKind = (typeof AssistantContentKind)[keyof typeof AssistantContentKind];
 
-export const SessionStatusKind = {
+export const SessionStatusKind: {
+  readonly Busy: "busy";
+  readonly Retry: "retry";
+  readonly Idle: "idle";
+} = {
   Busy: "busy",
   Retry: "retry",
   Idle: "idle",
@@ -131,7 +195,11 @@ export const SessionStatusKind = {
 export type SessionStatusKind = (typeof SessionStatusKind)[keyof typeof SessionStatusKind];
 
 type SessionOutcomeValue = NonNullable<SessionInfo["outcome"]>;
-export const SessionOutcome = {
+export const SessionOutcome: {
+  readonly Succeeded: "succeeded";
+  readonly Failed: "failed";
+  readonly Interrupted: "interrupted";
+} = {
   Succeeded: "succeeded",
   Failed: "failed",
   Interrupted: "interrupted",
@@ -139,7 +207,12 @@ export const SessionOutcome = {
 export type SessionOutcome = (typeof SessionOutcome)[keyof typeof SessionOutcome];
 
 type MediaSourceType = Extract<ContentPart, { type: "media" }>["media"]["source"]["type"];
-export const MediaSourceKind = {
+export const MediaSourceKind: {
+  readonly Url: "url";
+  readonly Ref: "ref";
+  readonly Base64: "base64";
+  readonly Bytes: "bytes";
+} = {
   Url: "url",
   Ref: "ref",
   Base64: "base64",
@@ -149,13 +222,20 @@ export type MediaSourceKind = (typeof MediaSourceKind)[keyof typeof MediaSourceK
 
 type McpServer = NonNullable<Config["mcp"]>[string];
 type McpServerTypeValue = Extract<McpServer, { type: string }>["type"];
-export const McpServerType = {
+export const McpServerType: {
+  readonly Local: "local";
+  readonly Remote: "remote";
+} = {
   Local: "local",
   Remote: "remote",
 } as const satisfies Record<string, McpServerTypeValue>;
 export type McpServerType = (typeof McpServerType)[keyof typeof McpServerType];
 
-export const AgentMode = {
+export const AgentMode: {
+  readonly Subagent: "subagent";
+  readonly Primary: "primary";
+  readonly All: "all";
+} = {
   Subagent: "subagent",
   Primary: "primary",
   All: "all",
@@ -168,11 +248,11 @@ export const PermissionEffect = {
   Ask: "ask",
 } as const;
 export type PermissionEffect = (typeof PermissionEffect)[keyof typeof PermissionEffect];
-export const permissionEffects = [
-  PermissionEffect.Allow,
-  PermissionEffect.Deny,
-  PermissionEffect.Ask,
-] as const;
+export const permissionEffects: readonly [
+  typeof PermissionEffect.Allow,
+  typeof PermissionEffect.Deny,
+  typeof PermissionEffect.Ask,
+] = [PermissionEffect.Allow, PermissionEffect.Deny, PermissionEffect.Ask] as const;
 
 export const NativeAction = {
   Edit: "edit",
@@ -190,7 +270,39 @@ export const LegacyAction = {
 } as const;
 export type LegacyAction = (typeof LegacyAction)[keyof typeof LegacyAction];
 
-export const SessionEventType = {
+export const SessionEventType: {
+  readonly Created: "session.created";
+  readonly Deleted: "session.deleted";
+  readonly Renamed: "session.renamed";
+  readonly Moved: "session.moved";
+  readonly AgentSelected: "session.agent.selected";
+  readonly ModelSelected: "session.model.selected";
+  readonly MetadataUpdated: "session.metadata.updated";
+  readonly Permissions: "session.permissions";
+  readonly Archived: "session.archived";
+  readonly Unarchived: "session.unarchived";
+  readonly ExecutionStarted: "session.execution.started";
+  readonly ExecutionSucceeded: "session.execution.succeeded";
+  readonly ExecutionFailed: "session.execution.failed";
+  readonly ExecutionInterrupted: "session.execution.interrupted";
+  readonly InboxDelivered: "session.inbox.delivered";
+  readonly Synthetic: "session.synthetic";
+  readonly StepStarted: "session.step.started";
+  readonly StepEnded: "session.step.ended";
+  readonly StepFailed: "session.step.failed";
+  readonly TextDelta: "session.text.delta";
+  readonly TextEnded: "session.text.ended";
+  readonly ReasoningDelta: "session.reasoning.delta";
+  readonly ReasoningEnded: "session.reasoning.ended";
+  readonly ToolCalled: "session.tool.called";
+  readonly ToolProgress: "session.tool.progress";
+  readonly ToolSuccess: "session.tool.success";
+  readonly ToolFailed: "session.tool.failed";
+  readonly RetryScheduled: "session.retry.scheduled";
+  readonly CompactionStarted: "session.compaction.started";
+  readonly CompactionEnded: "session.compaction.ended";
+  readonly CompactionFailed: "session.compaction.failed";
+} = {
   Created: "session.created",
   Deleted: "session.deleted",
   Renamed: "session.renamed",
@@ -225,7 +337,12 @@ export const SessionEventType = {
 } as const satisfies Record<string, Exclude<OpenCodeEvent["type"], "server.connected">>;
 export type SessionEventType = (typeof SessionEventType)[keyof typeof SessionEventType];
 
-export const SessionRequestKind = {
+export const SessionRequestKind: {
+  readonly Primary: "primary";
+  readonly Compaction: "compaction";
+  readonly Title: "title";
+  readonly Generate: "generate";
+} = {
   Primary: "primary",
   Compaction: "compaction",
   Title: "title",
@@ -243,7 +360,10 @@ export const SessionOperation = {
 } as const;
 export type SessionOperation = (typeof SessionOperation)[keyof typeof SessionOperation];
 
-export const PromptFileSourceKind = {
+export const PromptFileSourceKind: {
+  readonly Inline: "inline";
+  readonly Uri: "uri";
+} = {
   Inline: "inline",
   Uri: "uri",
 } as const satisfies Record<string, PromptFileSource["type"]>;
@@ -251,7 +371,20 @@ export type PromptFileSourceKind = (typeof PromptFileSourceKind)[keyof typeof Pr
 
 /** Legacy event types OmO reads that no SDK `Event` union defines. */
 type OmoEventType = "session.compaction.started" | "session.compaction.failed";
-export const LegacyEventType = {
+export const LegacyEventType: {
+  readonly SessionCreated: "session.created";
+  readonly SessionUpdated: "session.updated";
+  readonly SessionDeleted: "session.deleted";
+  readonly SessionStatus: "session.status";
+  readonly SessionError: "session.error";
+  readonly SessionIdle: "session.idle";
+  readonly SessionCompacted: "session.compacted";
+  readonly SessionCompactionStarted: "session.compaction.started";
+  readonly SessionCompactionFailed: "session.compaction.failed";
+  readonly MessageUpdated: "message.updated";
+  readonly MessagePartUpdated: "message.part.updated";
+  readonly TodoUpdated: "todo.updated";
+} = {
   SessionCreated: "session.created",
   SessionUpdated: "session.updated",
   SessionDeleted: "session.deleted",
@@ -279,7 +412,12 @@ export const TodoStatus = {
   Cancelled: "cancelled",
 } as const;
 export type TodoStatus = (typeof TodoStatus)[keyof typeof TodoStatus];
-export const todoStatuses = [
+export const todoStatuses: readonly [
+  typeof TodoStatus.Pending,
+  typeof TodoStatus.InProgress,
+  typeof TodoStatus.Completed,
+  typeof TodoStatus.Cancelled,
+] = [
   TodoStatus.Pending,
   TodoStatus.InProgress,
   TodoStatus.Completed,
@@ -294,36 +432,65 @@ export const TodoPriority = {
 export type TodoPriority = (typeof TodoPriority)[keyof typeof TodoPriority];
 
 type ToastVariantValue = NonNullable<TuiShowToastData["body"]>["variant"];
-export const ToastVariant = {
+export const ToastVariant: {
+  readonly Info: "info";
+  readonly Success: "success";
+  readonly Warning: "warning";
+  readonly Error: "error";
+} = {
   Info: "info",
   Success: "success",
   Warning: "warning",
   Error: "error",
 } as const satisfies Record<string, ToastVariantValue>;
 export type ToastVariant = (typeof ToastVariant)[keyof typeof ToastVariant];
-export const toastVariants = [
-  ToastVariant.Info,
-  ToastVariant.Success,
-  ToastVariant.Warning,
-  ToastVariant.Error,
-] as const;
+export const toastVariants: readonly [
+  typeof ToastVariant.Info,
+  typeof ToastVariant.Success,
+  typeof ToastVariant.Warning,
+  typeof ToastVariant.Error,
+] = [ToastVariant.Info, ToastVariant.Success, ToastVariant.Warning, ToastVariant.Error] as const;
 
-export const CompactionStatus = {
+export const CompactionStatus: {
+  readonly Running: "running";
+  readonly Completed: "completed";
+  readonly Failed: "failed";
+} = {
   Running: "running",
   Completed: "completed",
   Failed: "failed",
 } as const satisfies Record<string, SessionMessageCompaction["status"]>;
 export type CompactionStatus = (typeof CompactionStatus)[keyof typeof CompactionStatus];
 
-export const GoalStatus = {
+export const GoalStatus: {
+  readonly Active: "active";
+  readonly Paused: "paused";
+  readonly Complete: "complete";
+} = {
   Active: "active",
   Paused: "paused",
   Complete: "complete",
 } as const satisfies Record<string, Goal.Status>;
 export type GoalStatus = (typeof GoalStatus)[keyof typeof GoalStatus];
-export const goalStatuses = [GoalStatus.Active, GoalStatus.Paused, GoalStatus.Complete] as const;
+export const goalStatuses: readonly [
+  typeof GoalStatus.Active,
+  typeof GoalStatus.Paused,
+  typeof GoalStatus.Complete,
+] = [GoalStatus.Active, GoalStatus.Paused, GoalStatus.Complete] as const;
 
-export const ErrorName = {
+export const ErrorName: {
+  readonly ProviderAuth: "ProviderAuthError";
+  readonly Unknown: "UnknownError";
+  readonly OutputLength: "MessageOutputLengthError";
+  readonly Aborted: "MessageAbortedError";
+  readonly Api: "APIError";
+  readonly BadRequest: "BadRequest";
+  readonly NotFound: "NotFoundError";
+  readonly Abort: "AbortError";
+  readonly Bridge: "BridgeError";
+  readonly Compatibility: "CompatibilityError";
+  readonly SessionNotFound: "Session.NotFoundError";
+} = {
   ProviderAuth: "ProviderAuthError",
   Unknown: "UnknownError",
   OutputLength: "MessageOutputLengthError",
