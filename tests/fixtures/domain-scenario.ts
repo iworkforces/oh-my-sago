@@ -170,13 +170,13 @@ for (const mode of ["throw-permission", "invalid-status"]) {
 const unchanged = await probe("throw-after");
 assert.deepEqual(unchanged.content, [{ type: PartKind.Text, text: "probe throw-after asked" }]);
 assert.equal(unchanged.metadata?.["owner"], "probe");
-assert.equal(unchanged.metadata?.["mutated"], undefined);
+assert.equal(unchanged.metadata["mutated"], undefined);
 const degraded = await probe("cyclic");
 assert.deepEqual(degraded.content, [{ type: PartKind.Text, text: "probe cyclic asked" }]);
 assert.equal(degraded.metadata?.["owner"], "probe");
-assert.equal(degraded.metadata?.["title"], "probe result");
-assert.equal(degraded.metadata?.["cycle"], undefined);
-assert.equal(degraded.metadata?.["big"], undefined);
+assert.equal(degraded.metadata["title"], "probe result");
+assert.equal(degraded.metadata["cycle"], undefined);
+assert.equal(degraded.metadata["big"], undefined);
 
 const shelled = await session(PermissionEffect.Allow);
 await host.request(`/api/session/${shelled.id}/shell`, {
