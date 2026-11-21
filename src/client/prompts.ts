@@ -166,7 +166,7 @@ export function promptRoutes(context: Plugin.Context, holds: IdleHolds) {
       },
       options,
     );
-    holds.prompted(sessionID);
+    holds.prompted(sessionID, texts.join("\n"));
     if (operation === SessionOperation.PromptAsync) return new Response(null, { status: 204 });
     await context.session.wait({ sessionID }, options);
     const session = await context.session.get({ sessionID }, options);

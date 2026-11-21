@@ -95,6 +95,11 @@ export interface IdleHoldBounds {
 
 const defaultIdleHoldBounds: IdleHoldBounds = { claimMs: 1_000, notifyMs: 3_000, minTaskMs: 5_000 };
 
+/** A header line of OmO's background task notice, such as `[BACKGROUND TASK RESULT READY]`. */
+const noticeHeader = /^\[(?:ALL )?BACKGROUND TASKS? [^\]\n]+\]$/m;
+/** The header line of OmO's last notice to a parent, sent once none of its tasks still runs. */
+const lastNoticeHeader = /^\[ALL BACKGROUND TASKS (?:COMPLETE|FINISHED[^\]\n]*)\]$/m;
+
 interface Adoption {
   readonly parentID: string;
   readonly created: number;
@@ -114,8 +119,8 @@ interface Hold extends Adoption {
  * a minute. So when a child OmO created goes idle under an idle parent, its idle reaches OmO while
  * the turn waits: OmO completes the task by aborting the child, which claims the hold, and prompts
  * the parent, which releases it. The parent then wakes to OmO's notice with OpenCode's report
- * behind it. A busy root parent of a child OmO aborts reports idle until OmO's notice reaches it,
- * which OpenCode then steers into the running turn. Each wait is bounded, after which the turn
+ * behind it. A busy root parent of a child OmO aborts reports idle until OmO's last notice reaches
+ * it, which OpenCode then steers into the running turn. Each wait is bounded, after which the turn
  * ends, or the parent reports busy, as usual. Shared by one bridge's event loop, which holds and
  * announces the idle, and its routes.
  */
@@ -194,14 +199,20 @@ export class IdleHolds {
     this.#notices.set(parentID, timer);
   }
   /**
-   * Ends the notice wait of a session a prompt reached and releases the claimed children it
-   * notifies, then the session's own hold, whose turn runs on with the prompt.
+   * Releases the hold of a session a prompt reached, whose turn runs on with the prompt. OmO's
+   * background notice to a parent also releases the children OmO claimed, and OmO's last notice,
+   * sent once none of the parent's tasks still runs, ends the parent's notice wait. Any other
+   * prompt, or a notice of one task while another runs, leaves that wait for a later notice.
    */
-  prompted(sessionID: string): void {
-    clearTimeout(this.#notices.get(sessionID));
-    this.#notices.delete(sessionID);
-    for (const [childID, hold] of this.#holds)
-      if (hold.parentID === sessionID && hold.claimed) this.release(childID);
+  prompted(sessionID: string, text: string): void {
+    if (noticeHeader.test(text)) {
+      for (const [childID, hold] of this.#holds)
+        if (hold.parentID === sessionID && hold.claimed) this.release(childID);
+      if (lastNoticeHeader.test(text)) {
+        clearTimeout(this.#notices.get(sessionID));
+        this.#notices.delete(sessionID);
+      }
+    }
     this.release(sessionID);
   }
   /**
