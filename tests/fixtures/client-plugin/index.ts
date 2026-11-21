@@ -30,7 +30,10 @@ export default Plugin.define({
     const toasts = await context.rpc.register(toastRpc, {});
     scope.defer(toasts.dispose);
     const toastsProbe = toastProbe(toasts.events);
-    const bridge = createClientBridge(context, toastsProbe.emitter);
+    // Bounds no fixture step outlasts, so a held idle ends only on the fixture's own notice.
+    const bridge = createClientBridge(context, toastsProbe.emitter, {
+      idleHold: { claimMs: 60_000, notifyMs: 60_000 },
+    });
     scope.defer(bridge.close);
     scope.defer(
       (
