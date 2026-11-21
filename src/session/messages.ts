@@ -13,7 +13,7 @@ import {
   ToolResultKind,
   ToolStateStatus,
 } from "../enums.js";
-import { hideMarkers, showMarkers } from "./markers.js";
+import { hideMarkers, showMarkers, storedMarkers } from "./markers.js";
 import { type Backing, answering, restore, unsupported } from "./message-restore.js";
 
 type RequestMessage = SessionRequest["messages"][number];
@@ -294,10 +294,7 @@ function answerTurn(
   return [...leading, ...moved, ...answers, ...rest];
 }
 
-function answerCalls(
-  messages: readonly RequestMessage[],
-  fallback: (call: ToolCallPart) => ToolResultPart,
-): RequestMessage[] {
+function splitTurns(messages: readonly RequestMessage[]): RequestMessage[][] {
   const turns: RequestMessage[][] = [];
   let turn: RequestMessage[] = [];
   for (const native of messages) {
@@ -308,24 +305,100 @@ function answerCalls(
     turn.push(native);
   }
   turns.push(turn);
-  return turns.flatMap((entries) => answerTurn(entries, fallback));
+  return turns;
+}
+
+function answerCalls(
+  messages: readonly RequestMessage[],
+  fallback: (call: ToolCallPart) => ToolResultPart,
+): RequestMessage[] {
+  return splitTurns(messages).flatMap((entries) => answerTurn(entries, fallback));
 }
 
 const reminderBlock = /<system-reminder>[\s\S]*?<\/system-reminder>/g;
+/** OpenCode's report of a child's answer, without a note of work the child still runs. */
+const childReport =
+  /^<subagent sessionID="[^"]+" state="completed" description="([^\n]*)">\n([\s\S]*)\n<\/subagent>$/;
+/** OmO titles a `look_at` child with this prefix, and OpenCode reports the title as its description. */
+const lookAtTitle = "look_at: ";
+const words = (value: string): string => value.replace(/\s+/g, " ").trim();
+
+interface Report {
+  readonly childID: string;
+  readonly description: string;
+  readonly answer: string;
+}
+
+function childAnswer(native: RequestMessage): Report | undefined {
+  if (native.role !== MessageRole.User || native.metadata?.["source"] !== "subagent")
+    return undefined;
+  const childID = native.metadata["childID"];
+  const [part, ...rest] = native.content;
+  if (typeof childID !== "string" || part?.type !== ContentKind.Text || rest.length > 0)
+    return undefined;
+  const [, description, answer] = childReport.exec(part.text) ?? [];
+  return description === undefined || answer === undefined || words(answer) === ""
+    ? undefined
+    : { childID, description, answer };
+}
+
+function resultText(part: ToolResultPart): string | undefined {
+  switch (part.result.type) {
+    case ToolResultKind.Text:
+      return text(part.result.value);
+    case ToolResultKind.Content:
+      return part.result.value
+        .flatMap((item) => (item.type === ToolContentKind.Text ? [item.text] : []))
+        .join("\n");
+    case ToolResultKind.Json:
+    case ToolResultKind.Error:
+      return undefined;
+    default:
+      return assertNever(part.result);
+  }
+}
 
 /**
- * Shows the model OmO's internal prompts as written for it: without OmO's markers, and without a
- * `<system-reminder>` block that an earlier user message of the same turn already carries. OmO
- * records a background notice without a reply while its parent looks busy, then sends the same
- * notice to wake the parent; v2 holds the first in the session inbox until that wake, so both reach
- * the model side by side. A message left empty is dropped. A reminder repeated after an assistant
- * reply is kept, since that repeat is deliberate.
+ * Whether a tool result already gave the model the reported answer: OmO's synchronous `task`
+ * returns each of its lines whole with the child's session id, `look_at` returns it alone.
+ * OpenCode joins the answer's text parts with blank lines, and OmO joins them, with reasoning
+ * between, with line breaks.
  */
-export function cleanInternalPrompts(messages: readonly RequestMessage[]): RequestMessage[] {
-  let seen = new Set<string>();
-  return messages.flatMap((native): RequestMessage[] => {
-    if (native.role === MessageRole.Assistant) seen = new Set();
+function returned(report: Report, results: readonly ToolResultPart[]): boolean {
+  const answer = words(report.answer);
+  const lines = report.answer.split("\n").map(words);
+  return results.some((result) => {
+    const output = resultText(result);
+    if (output === undefined) return false;
+    if (result.name === "look_at")
+      return report.description.startsWith(lookAtTitle) && words(output) === answer;
+    if (!output.includes(report.childID)) return false;
+    const whole = new Set(output.split("\n").map(words));
+    return lines.every((line) => line === "" || whole.has(line));
+  });
+}
+
+function cleanTurn(
+  turn: readonly RequestMessage[],
+  shown: ReadonlySet<string>,
+  earlier: readonly ToolResultPart[],
+): {
+  messages: RequestMessage[];
+  kept: ReadonlySet<string>;
+  results: readonly ToolResultPart[];
+} {
+  const kept = new Set<string>();
+  const results: ToolResultPart[] = [];
+  const messages = turn.flatMap((native): RequestMessage[] => {
+    if (native.role === MessageRole.Tool) results.push(...native.content);
     if (native.role !== MessageRole.User) return [native];
+    const report = childAnswer(native);
+    if (report !== undefined && (returned(report, results) || returned(report, earlier))) return [];
+    const fromOmO =
+      storedMarkers(native.metadata).length > 0 ||
+      native.content.some(
+        (part) => part.type === ContentKind.Text && hideMarkers(part.text).markers.length > 0,
+      );
     let changed = false;
     const content = native.content.flatMap((part): (typeof native.content)[number][] => {
       if (part.type !== ContentKind.Text) return [part];
@@ -333,8 +406,8 @@ export function cleanInternalPrompts(messages: readonly RequestMessage[]): Reque
       let removed = markers.length > 0;
       const cleaned = unmarked
         .replace(reminderBlock, (block) => {
-          if (!seen.has(block)) {
-            seen.add(block);
+          if (!kept.has(block) && !(fromOmO && shown.has(block))) {
+            kept.add(block);
             return block;
           }
           removed = true;
@@ -347,6 +420,35 @@ export function cleanInternalPrompts(messages: readonly RequestMessage[]): Reque
     });
     if (!changed) return [native];
     return content.length === 0 ? [] : [{ ...nativeFields(native), role: native.role, content }];
+  });
+  return { messages, kept, results };
+}
+
+const prompting = (native: RequestMessage): boolean => native.role !== MessageRole.Assistant;
+
+/**
+ * Shows the model OmO's internal prompts as written for it: without OmO's markers, and without a
+ * `<system-reminder>` block the model was already shown. OmO records a background notice without a
+ * reply while its parent looks busy, then sends the same notice to wake the parent; v2 holds the
+ * first in the session inbox until that wake, so both reach the model side by side. OmO also sends a
+ * notice again, merged with any newer one, when no assistant output shows up within seconds of the
+ * first send, although the model may have read and answered it by then. So a block is dropped when
+ * an earlier user message of its turn carries it, or when OmO repeats it from an earlier turn; a
+ * user's own message keeps what it quotes. OpenCode reports a child's answer to its parent as the
+ * child's turn ends, also when a tool of the parent already returned that answer, so that report is
+ * dropped too. A message left empty is dropped, unless that leaves its turn with nothing to answer:
+ * the repeat alone is then asking, and the turn keeps it.
+ */
+export function cleanInternalPrompts(messages: readonly RequestMessage[]): RequestMessage[] {
+  const shown = new Set<string>();
+  const results: ToolResultPart[] = [];
+  return splitTurns(messages).flatMap((turn) => {
+    let cleaned = cleanTurn(turn, shown, results);
+    if (turn.some(prompting) && !cleaned.messages.some(prompting))
+      cleaned = cleanTurn(turn, new Set(), []);
+    for (const block of cleaned.kept) shown.add(block);
+    for (const result of cleaned.results) results.push(result);
+    return cleaned.messages;
   });
 }
 

@@ -476,6 +476,161 @@ test("the model gets OmO notices without markers or a reminder repeated within t
   expect(messages[3]).toBe(repeated);
 });
 
+test("the model gets an OmO notice it read in an earlier turn again only when OmO asks with it alone", () => {
+  const next = "<system-reminder>\n[BACKGROUND TASK ERROR]\n</system-reminder>";
+  const metadata = { [markerMetadata]: [initiator, noReply] };
+  const notice = { id: "notice", role: MessageRole.User, metadata, content: [textPart(done)] };
+  const read = { id: "read", role: MessageRole.Assistant, content: [textPart("noted")] };
+  const merged = {
+    id: "merged",
+    role: MessageRole.User,
+    metadata,
+    content: [textPart(`${done}\n\n${next}`)],
+  };
+  const woken = { id: "woken", role: MessageRole.User, content: [textPart("<subagent />")] };
+  const idle = { id: "idle", role: MessageRole.Assistant, content: [textPart("waiting")] };
+  const asked = { id: "asked", role: MessageRole.User, metadata, content: [textPart(done)] };
+  const answered = { id: "answered", role: MessageRole.Assistant, content: [textPart("again")] };
+  const quoted = {
+    id: "quoted",
+    role: MessageRole.User,
+    content: [textPart(`Why twice?\n${done}`)],
+  };
+  const messages = cleanInternalPrompts([
+    notice,
+    read,
+    merged,
+    woken,
+    idle,
+    asked,
+    answered,
+    quoted,
+  ]);
+  expect(messages).toEqual([
+    notice,
+    read,
+    { ...merged, content: [textPart(next)] },
+    woken,
+    idle,
+    asked,
+    answered,
+    quoted,
+  ]);
+  expect(messages[5]).toBe(asked);
+  expect(messages[7]).toBe(quoted);
+});
+
+const childReport = (
+  id: string,
+  childID: string,
+  answer: string,
+  state = "completed",
+  description = "look around",
+) => ({
+  id,
+  role: MessageRole.User,
+  metadata: { source: "subagent", childID, agent: "explore", state },
+  content: [
+    textPart(
+      `<subagent sessionID="${childID}" state="${state}" description="${description}">\n${answer}\n</subagent>`,
+    ),
+  ],
+});
+const taskCall = (id: string): ToolCallPart => ({
+  type: ContentKind.ToolCall,
+  id,
+  name: "task",
+  input: {},
+});
+const taskResult = (id: string, value: string): ToolResultPart => ({
+  type: ContentKind.ToolResult,
+  id,
+  name: "task",
+  result: { type: ToolResultKind.Text, value },
+});
+const syncOutput =
+  "Task completed in 2s.\n\n---\n\nFirst finding.\nweighing it\nSecond   finding.\n\n<task_metadata>\nsession_id: ses_sync\n</task_metadata>";
+
+test("the model gets a child's answer once when a tool of the parent already returned it", () => {
+  const asked = { id: "asked", role: MessageRole.User, content: [textPart("delegate")] };
+  const calls = {
+    id: "calls",
+    role: MessageRole.Assistant,
+    content: [taskCall("sync"), taskCall("look")],
+  };
+  const results = {
+    id: "results",
+    role: MessageRole.Tool,
+    content: [
+      taskResult("sync", syncOutput),
+      { ...taskResult("look", "The image shows\na cat."), name: "look_at" },
+    ],
+  };
+  const messages = cleanInternalPrompts([
+    asked,
+    calls,
+    results,
+    childReport("synced", "ses_sync", "First finding.\n\nSecond finding."),
+    childReport("looked", "ses_look", "The image shows a cat.", "completed", "look_at: the image"),
+  ]);
+  expect(messages).toEqual([asked, calls, results]);
+});
+
+test("the model keeps a child's report no tool returned in full, and one that alone asks", () => {
+  const asked = { id: "asked", role: MessageRole.User, content: [textPart("delegate")] };
+  const call = {
+    id: "call",
+    role: MessageRole.Assistant,
+    content: [
+      taskCall("sync"),
+      taskCall("launch"),
+      { ...taskCall("count"), name: "bash" },
+      { ...taskCall("look"), name: "look_at" },
+    ],
+  };
+  const launched =
+    "Background task launched.\n\nWait for <system-reminder> notification first.\n\n<task_metadata>\nsession_id: ses_short\n</task_metadata>";
+  const result = {
+    id: "result",
+    role: MessageRole.Tool,
+    content: [
+      taskResult("sync", syncOutput),
+      taskResult("launch", launched),
+      { ...taskResult("count", "0"), name: "bash" },
+      { ...taskResult("look", "No"), name: "look_at" },
+    ],
+  };
+  const partial = childReport("partial", "ses_sync", "First finding.\n\nA finding not returned.");
+  const background = childReport("background", "ses_background", "First finding.");
+  const short = childReport("short", "ses_short", "no");
+  const zero = childReport("zero", "ses_zero", "0");
+  const unlooked = childReport("unlooked", "ses_unlooked", "No");
+  const running = childReport(
+    "running",
+    "ses_sync",
+    "First finding.\n\nBackground work still running:\n- shell (sh_1): sleep 9",
+    "running",
+  );
+  const answered = { id: "answered", role: MessageRole.Assistant, content: [textPart("done")] };
+  const woken = childReport("woken", "ses_sync", "First finding.");
+  const history = [
+    asked,
+    call,
+    result,
+    partial,
+    background,
+    short,
+    zero,
+    unlooked,
+    running,
+    answered,
+    woken,
+  ];
+  const messages = cleanInternalPrompts(history);
+  expect(messages).toEqual(history);
+  expect(messages[10]).toBe(woken);
+});
+
 test("OmO reads back the markers a stored prompt was saved without", async () => {
   const hidden = hideMarkers(`${done}\n${initiator}\n\n${noReply}`);
   expect(hidden).toEqual({ text: done, markers: [initiator, noReply] });

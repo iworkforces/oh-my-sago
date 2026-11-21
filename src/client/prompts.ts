@@ -11,13 +11,14 @@ import {
   SessionOutcome,
 } from "../enums.js";
 import { body, promptBody, summarizeBody } from "./requests.js";
+import type { IdleHolds } from "./sessions.js";
 import { abortedBy } from "./signal.js";
 import { clientMetadata, promptOverrides } from "./state.js";
 import { nativeAction } from "../domains/permissions.js";
 import { metadata } from "../domains/value.js";
 import { applySwitch, resolveSwitch } from "../session/model.js";
 
-export function promptRoutes(context: Plugin.Context) {
+export function promptRoutes(context: Plugin.Context, holds: IdleHolds) {
   return async (request: Request, sessionID: string, operation: string): Promise<Response> => {
     const options = { signal: request.signal };
     if (operation === SessionOperation.Summarize) {
@@ -165,6 +166,7 @@ export function promptRoutes(context: Plugin.Context) {
       },
       options,
     );
+    holds.prompted(sessionID);
     if (operation === SessionOperation.PromptAsync) return new Response(null, { status: 204 });
     await context.session.wait({ sessionID }, options);
     const session = await context.session.get({ sessionID }, options);

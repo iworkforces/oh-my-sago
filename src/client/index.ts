@@ -9,10 +9,11 @@ import { currentProject, discoveryRoute } from "./discovery.js";
 import { BridgeError, errorResponse, unsupported } from "./errors.js";
 import { type LegacyEventSink, clientEvents } from "./events.js";
 import { body } from "./requests.js";
-import { BackgroundWaits, SessionRetries } from "./sessions.js";
+import { BackgroundWaits, type IdleHoldBounds, IdleHolds, SessionRetries } from "./sessions.js";
 import { sessionRoutes } from "./session-routes.js";
 import { raceAbort } from "./signal.js";
 import { ClientSessionState } from "./state.js";
+import { attributedSession } from "./toast-session.js";
 
 export type ClientBridge = {
   readonly input: PluginInput & {
@@ -36,6 +37,8 @@ export type ClientBridge = {
 export type ClientBridgeOptions = {
   /** How long a closed bridge waits for an open one in its directory; defaults to 10 seconds. */
   readonly successorMs?: number;
+  /** Bounds on holding a background child's turn for OmO's notice; see `IdleHolds`. */
+  readonly idleHold?: Partial<IdleHoldBounds>;
 };
 
 type Route = (request: Request) => Promise<Response>;
@@ -214,13 +217,16 @@ export function createClientBridge(
   const sessionState = new ClientSessionState();
   const retries = new SessionRetries();
   const waits = new BackgroundWaits();
-  const sessions = sessionRoutes(context, sessionState, retries, waits);
-  const events = clientEvents(context, retries, waits, sessionState);
+  const holds = new IdleHolds(options.idleHold);
+  const sessions = sessionRoutes(context, sessionState, retries, waits, holds);
+  const events = clientEvents(context, retries, waits, holds, sessionState);
   let closed = false;
   const showToast = async (request: Request): Promise<Response> => {
+    // Read before awaiting: the attribution ends soon after the hook that requested the toast.
+    const sessionID = attributedSession();
     const input = await body(request, toast);
     try {
-      await toasts.emit("toast", input);
+      await toasts.emit("toast", sessionID === undefined ? input : { ...input, sessionID });
     } catch (error) {
       console.error("Client bridge could not deliver a toast", error);
     }
@@ -306,6 +312,7 @@ export function createClientBridge(
       await events.stop();
       retries.stop();
       waits.clear();
+      holds.stop();
     },
     close: async () => {
       closed = true;
@@ -314,6 +321,7 @@ export function createClientBridge(
       await events.stop();
       retries.stop();
       waits.clear();
+      holds.stop();
     },
   };
 }

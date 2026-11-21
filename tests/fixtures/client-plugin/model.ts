@@ -67,6 +67,7 @@ export function clientModel(): ClientModel {
   const stalled = new Set<string>();
   let pendingHold: { readonly entered: () => void; readonly release: Promise<void> } | undefined;
   let retries = 0;
+  let verdicts = 0;
   const script: Script = async (request) => {
     const texts = request.prompt.flatMap((message) =>
       message.role === MessageRole.User
@@ -90,6 +91,15 @@ export function clientModel(): ClientModel {
         text.includes("CLIENT_COMPACTION_FAILURE")
           ? "invalid summary"
           : "## Objective\n- fixture summary",
+      );
+    // OpenCode's goal reviewer: one more round, then done.
+    if (latest.includes("You are now the reviewer for the session's goal"))
+      return answer(
+        JSON.stringify(
+          verdicts++ === 0
+            ? { verdict: "continue", reason: "one reply so far", next_step: "reply again" }
+            : { verdict: "done", reason: "the fixture replied twice" },
+        ),
       );
     const answered = request.prompt.some((message) => message.role === MessageRole.Tool);
     if (text.includes("CLIENT_VARIANT"))

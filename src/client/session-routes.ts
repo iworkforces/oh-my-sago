@@ -5,6 +5,7 @@ import { legacyMessages } from "./messages.js";
 import { body, createBody, updateBody } from "./requests.js";
 import {
   type BackgroundWaits,
+  type IdleHolds,
   type SessionRetries,
   legacySession,
   listSessions,
@@ -12,14 +13,36 @@ import {
 import { permissionRules, type ClientSessionState } from "./state.js";
 import { promptRoutes } from "./prompts.js";
 import { sessionTodos } from "./todos.js";
+import { attributedSession } from "./toast-session.js";
 
 export function sessionRoutes(
   context: Plugin.Context,
   state: ClientSessionState,
   retries: SessionRetries,
   waits: BackgroundWaits,
+  holds: IdleHolds,
 ) {
-  const prompt = promptRoutes(context);
+  const prompt = promptRoutes(context, holds);
+  /**
+   * OmO notifies a background task's parent once it completes or cancels the task by aborting the
+   * child, and waits while the parent is busy, so a root parent reports idle for that notice. Not
+   * when the parent's own work aborted the child, as a synchronous task does once it has the
+   * answer, and not for a child parent, whose status OmO reads as its own task still running.
+   */
+  const noticeParent = async (request: Request, sessionID: string, caller: string | undefined) => {
+    const parentID = holds.parentOf(sessionID);
+    if (parentID === undefined || parentID === caller) return;
+    try {
+      const parent = await context.session.get({ sessionID: parentID }, { signal: request.signal });
+      if (parent.parentID === undefined) holds.notice(parentID);
+    } catch (error) {
+      if (request.signal.aborted) throw error;
+      console.error("Client bridge could not prepare a parent for OmO's notice", {
+        parentID,
+        error,
+      });
+    }
+  };
   return async (request: Request, path: readonly string[]): Promise<Response> => {
     const options = { signal: request.signal };
     const sessionID = path[1];
@@ -52,6 +75,7 @@ export function sessionRoutes(
           },
           options,
         );
+        if (session.parentID !== undefined) holds.adopt(session.id, session.parentID);
         return Response.json(legacySession(session, context.app.version));
       }
     }
@@ -59,7 +83,11 @@ export function sessionRoutes(
       const sessions = await listSessions(context, request);
       return Response.json(
         Object.fromEntries(
-          sessions.map((session) => [session.id, waits.status(session, retries.status(session))]),
+          sessions.map((session) => [
+            session.id,
+            // A session still running its own work stays busy through a notice.
+            waits.status(session, holds.status(session, retries.status(session))),
+          ]),
         ),
       );
     }
@@ -87,6 +115,7 @@ export function sessionRoutes(
           );
         }
         case "DELETE":
+          holds.delete(sessionID);
           await context.session.remove({ sessionID }, options);
           state.delete(sessionID);
           retries.clear(sessionID);
@@ -97,8 +126,14 @@ export function sessionRoutes(
     if (operation === SessionOperation.Todo && request.method === "GET" && path.length === 3)
       return Response.json(await sessionTodos(context, sessionID, options));
     if (operation === SessionOperation.Abort && request.method === "POST") {
-      const result = await context.session.interrupt({ sessionID }, options);
-      return Response.json(result.interrupted);
+      // Read before awaiting: the attribution ends soon after the work that made the request.
+      const caller = attributedSession();
+      // OmO aborts a background task's session as it completes the task; a held turn is already done.
+      const interrupted = holds.claim(sessionID)
+        ? false
+        : (await context.session.interrupt({ sessionID }, options)).interrupted;
+      await noticeParent(request, sessionID, caller);
+      return Response.json(interrupted);
     }
     if (operation === SessionOperation.Message && request.method === "GET") {
       const session = await context.session.get({ sessionID }, options);

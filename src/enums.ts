@@ -9,6 +9,7 @@ import type {
   SessionMessageInfo,
 } from "@opencode/client";
 import type { SessionModelResolve, SessionRequest } from "@opencode/plugin/promise/session";
+import type { Goal } from "@opencode/schema/goal";
 import type {
   AgentConfig,
   AssistantMessage,
@@ -313,6 +314,14 @@ export const CompactionStatus = {
   Failed: "failed",
 } as const satisfies Record<string, SessionMessageCompaction["status"]>;
 export type CompactionStatus = (typeof CompactionStatus)[keyof typeof CompactionStatus];
+
+export const GoalStatus = {
+  Active: "active",
+  Paused: "paused",
+  Complete: "complete",
+} as const satisfies Record<string, Goal.Status>;
+export type GoalStatus = (typeof GoalStatus)[keyof typeof GoalStatus];
+export const goalStatuses = [GoalStatus.Active, GoalStatus.Paused, GoalStatus.Complete] as const;
 
 export const ErrorName = {
   ProviderAuth: "ProviderAuthError",

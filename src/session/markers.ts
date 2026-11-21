@@ -15,11 +15,15 @@ export function hideMarkers(text: string): { text: string; markers: string[] } {
   return { text: markers.length === 0 ? text : text.replace(marker, "").trimEnd(), markers };
 }
 
+export function storedMarkers(metadata: Readonly<Record<string, unknown>> | undefined): string[] {
+  const stored = metadata?.[markerMetadata];
+  return stored === undefined ? [] : z.array(z.string()).parse(stored);
+}
+
 export function showMarkers(
   text: string,
   metadata: Readonly<Record<string, unknown>> | undefined,
 ): string {
-  const stored = metadata?.[markerMetadata];
-  if (stored === undefined) return text;
-  return [text, ...z.array(z.string()).parse(stored)].join("\n");
+  const markers = storedMarkers(metadata);
+  return markers.length === 0 ? text : [text, ...markers].join("\n");
 }

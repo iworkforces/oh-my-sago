@@ -3,7 +3,9 @@ import type { OpenCodeEvent } from "@opencode/client";
 import type { Plugin } from "@opencode/plugin";
 import type { LegacyEvent } from "../../../src/client/events.js";
 import { createClientBridge } from "../../../src/client/index.js";
+import { IdleHolds, isBusy } from "../../../src/client/sessions.js";
 import { clientMetadata } from "../../../src/client/state.js";
+import { forSession } from "../../../src/client/toast-session.js";
 import {
   CompactionStatus,
   ContentKind,
@@ -36,7 +38,14 @@ type Scenario =
   | "queuedOverrides"
   | "overridesAfterFailure"
   | "rejectedSwitch"
-  | "backgroundWait";
+  | "backgroundWait"
+  | "idleHold"
+  | "idleHoldContinue"
+  | "idleHoldExpiry"
+  | "idleHoldGoal"
+  | "idleHoldUnmanaged"
+  | "idleHoldYoung"
+  | "parentNotice";
 
 /**
  * Relays a subscription, slipping in a `session.compaction.ended` that no compaction of ours
@@ -528,6 +537,13 @@ export async function verifyTurns(
   assert.ok(firstExecution.data, JSON.stringify(firstExecution.error));
   // The execution ended with its shell still waiting, so the shell's notice will wake the session.
   assert.equal((await client.session.status()).data?.[owner]?.type, SessionStatusKind.Busy);
+  // OmO's notice for a child it aborts leaves a parent still running its own work busy.
+  const ownerChild = await client.session.create({
+    body: { parentID: owner, title: "client idle child" },
+  });
+  assert.ok(ownerChild.data, JSON.stringify(ownerChild.error));
+  assert.equal((await client.session.abort({ path: { id: ownerChild.data.id } })).data, false);
+  assert.equal((await client.session.status()).data?.[owner]?.type, SessionStatusKind.Busy);
   await Bun.write(`${context.location.directory}/${backgroundRelease}`, "");
   await log.until(idleOf(owner), "idle after the background shell's notice", backgrounded);
   const replies = (await client.session.messages({ path: { id: owner } })).data
@@ -540,6 +556,202 @@ export async function verifyTurns(
     1,
   );
   assert.equal((await client.session.status()).data?.[owner]?.type, SessionStatusKind.Idle);
+
+  // A child's idle under an idle parent reaches OmO while its turn waits, so OmO's notice to the
+  // parent lands ahead of OpenCode's report, which then wakes the parent.
+  const family = async (title: string) => {
+    const parent = await create();
+    const child = await client.session.create({ body: { parentID: parent.id, title } });
+    assert.ok(child.data, JSON.stringify(child.error));
+    return { parent: parent.id, child: child.data.id };
+  };
+  const notice = "[BACKGROUND TASK COMPLETED] CLIENT_NOTICE";
+  /** Acts as OmO on a held idle: completes the task by aborting the child, then notifies. */
+  const notify = async ({ parent, child }: { parent: string; child: string }) => {
+    assert.ok(isBusy(await context.session.get({ sessionID: child })), "the child's turn is held");
+    assert.equal((await client.session.status()).data?.[child]?.type, SessionStatusKind.Idle);
+    assert.equal((await client.session.abort({ path: { id: child } })).data, false);
+    const notified = await client.session.promptAsync({
+      path: { id: parent },
+      body: { noReply: true, parts: text(notice) },
+    });
+    assert.equal(notified.response.status, 204);
+  };
+  const reports = async ({ parent, child }: { parent: string; child: string }) =>
+    (await context.session.context({ sessionID: parent })).flatMap((record, index) =>
+      record.type === RecordType.Synthetic &&
+      record.metadata?.["source"] === "subagent" &&
+      record.metadata["childID"] === child
+        ? [index]
+        : [],
+    );
+  const childStatuses = (mark: number, child: string) =>
+    log
+      .since(mark, child)
+      .flatMap((event) =>
+        event.type === LegacyEventType.SessionStatus
+          ? [event.properties.status.type]
+          : event.type === LegacyEventType.SessionIdle
+            ? [event.type]
+            : [],
+      );
+  const heldChild = await family("client held child");
+  const holding = log.mark();
+  const childTurn = await client.session.promptAsync({
+    path: { id: heldChild.child },
+    body: { parts: text("CLIENT_IDLE_HOLD") },
+  });
+  assert.equal(childTurn.response.status, 204);
+  await log.until(idleOf(heldChild.child), "a held child's idle", holding);
+  await notify(heldChild);
+  await log.until(idleOf(heldChild.parent), "the parent's turn on a notice and report", holding);
+  const parentRecords = await context.session.context({ sessionID: heldChild.parent });
+  const noticeAt = parentRecords.findIndex(
+    (record) => record.type === RecordType.User && record.text.includes("CLIENT_NOTICE"),
+  );
+  const heldReports = await reports(heldChild);
+  assert.equal(heldReports.length, 1, JSON.stringify(parentRecords));
+  assert.ok(noticeAt >= 0 && noticeAt < (heldReports[0] ?? -1), JSON.stringify(parentRecords));
+  assert.equal(
+    (await context.session.get({ sessionID: heldChild.child })).outcome,
+    SessionOutcome.Succeeded,
+  );
+  assert.deepEqual(childStatuses(holding, heldChild.child), [
+    SessionStatusKind.Busy,
+    SessionStatusKind.Idle,
+    LegacyEventType.SessionIdle,
+  ]);
+
+  // A prompt to a held child runs on in the same turn, which then goes idle once more.
+  const continued = await family("client continued child");
+  const continuing = log.mark();
+  await client.session.promptAsync({
+    path: { id: continued.child },
+    body: { parts: text("CLIENT_IDLE_HOLD first") },
+  });
+  await log.until(idleOf(continued.child), "a held child's first idle", continuing);
+  const runningOn = log.mark();
+  await client.session.promptAsync({
+    path: { id: continued.child },
+    body: { parts: text("CLIENT_IDLE_HOLD second") },
+  });
+  await log.until(idleOf(continued.child), "a held child's idle after running on", runningOn);
+  await notify(continued);
+  await log.until(idleOf(continued.parent), "the parent's turn after a child ran on", runningOn);
+  assert.equal((await reports(continued)).length, 1);
+  assert.deepEqual(childStatuses(continuing, continued.child), [
+    SessionStatusKind.Busy,
+    SessionStatusKind.Idle,
+    LegacyEventType.SessionIdle,
+    SessionStatusKind.Busy,
+    SessionStatusKind.Idle,
+    LegacyEventType.SessionIdle,
+  ]);
+
+  // A goal runs a child's turn on from its own idle hook, which the bridge cannot see, so a child
+  // with an active goal is not held: OmO sees it idle once, after the goal's last round.
+  const goaled = await family("client goal child");
+  const pursuing = log.mark();
+  await context.session.command({
+    sessionID: goaled.child,
+    name: "goal",
+    text: "CLIENT_GOAL reply twice",
+  });
+  await log.until(idleOf(goaled.child), "a goal child's idle", pursuing);
+  const goalReplies = (await client.session.messages({ path: { id: goaled.child } })).data
+    ?.flatMap((message) => message.parts)
+    .filter((part) => part.type === PartKind.Text && part.text === "client boundary reply");
+  assert.equal(goalReplies?.length, 2, JSON.stringify(goalReplies));
+  assert.deepEqual(childStatuses(pursuing, goaled.child), [
+    SessionStatusKind.Busy,
+    SessionStatusKind.Idle,
+    LegacyEventType.SessionIdle,
+  ]);
+  const goalNotice = log.mark();
+  assert.equal((await client.session.abort({ path: { id: goaled.child } })).data, false);
+  await client.session.promptAsync({ path: { id: goaled.parent }, body: { parts: text(notice) } });
+  await log.until(idleOf(goaled.parent), "the parent's turn after a goal child", goalNotice);
+  assert.equal((await reports(goaled)).length, 1);
+
+  // A child OmO did not create ends its turn as usual, and OpenCode's report wakes the parent.
+  const stranger = await create();
+  const { id: strayChild } = await context.session.create({
+    title: "client unmanaged child",
+    parentID: stranger.id,
+    location: { directory: context.location.directory },
+  });
+  const straying = log.mark();
+  await client.session.promptAsync({
+    path: { id: strayChild },
+    body: { parts: text("CLIENT_UNMANAGED") },
+  });
+  await log.until(idleOf(strayChild), "an unmanaged child's idle", straying);
+  assert.ok(!isBusy(await context.session.get({ sessionID: strayChild })), "the turn was not held");
+  await log.until(idleOf(stranger.id), "the parent's turn on OpenCode's report", straying);
+  assert.equal((await reports({ parent: stranger.id, child: strayChild })).length, 1);
+
+  // A busy root parent of a child OmO aborts reports idle until OmO's notice reaches it, so OmO
+  // sends it at once instead of waiting for the turn to end. Not when the parent's own work aborts.
+  const busy = await family("client noticed child");
+  const parentTurn = model.hold();
+  const noticing = log.mark();
+  await client.session.promptAsync({
+    path: { id: busy.parent },
+    body: { parts: text("CLIENT_HOLD busy parent") },
+  });
+  await parentTurn.entered;
+  await client.session.promptAsync({
+    path: { id: busy.child },
+    body: { parts: text("CLIENT_NOTICED") },
+  });
+  await log.until(idleOf(busy.child), "a child's idle under a busy parent", noticing);
+  assert.ok(!isBusy(await context.session.get({ sessionID: busy.child })), "the turn was not held");
+  const parentStatus = async () => (await client.session.status()).data?.[busy.parent]?.type;
+  assert.equal(await parentStatus(), SessionStatusKind.Busy);
+  const ownAbort = await forSession(busy.parent, () =>
+    client.session.abort({ path: { id: busy.child } }),
+  );
+  assert.equal(ownAbort.data, false);
+  assert.equal(await parentStatus(), SessionStatusKind.Busy);
+  assert.equal((await client.session.abort({ path: { id: busy.child } })).data, false);
+  assert.equal(await parentStatus(), SessionStatusKind.Idle);
+  const noticed = await client.session.promptAsync({
+    path: { id: busy.parent },
+    body: { noReply: true, parts: text(notice) },
+  });
+  assert.equal(noticed.response.status, 204);
+  assert.equal(await parentStatus(), SessionStatusKind.Busy);
+  parentTurn.release();
+  await log.until(idleOf(busy.parent), "the busy parent's turn with the notice", noticing);
+  const busyRecords = await context.session.context({ sessionID: busy.parent });
+  assert.ok(
+    busyRecords.some(
+      (record) => record.type === RecordType.User && record.text.includes("CLIENT_NOTICE"),
+    ),
+    JSON.stringify(busyRecords),
+  );
+  assert.equal((await reports(busy)).length, 1);
+
+  // Without OmO's claim or notice, a held turn ends at its bound.
+  const bounded = new IdleHolds({ claimMs: 1, notifyMs: 1, minTaskMs: 0 });
+  bounded.adopt("unclaimed", "parent");
+  await bounded.park("unclaimed");
+  assert.equal(bounded.parked("unclaimed"), false);
+  bounded.adopt("claimed", "parent");
+  const claimed = bounded.park("claimed");
+  assert.equal(bounded.claim("claimed"), true);
+  await claimed;
+  assert.equal(bounded.parked("claimed"), false);
+  const unadopted = bounded.park("unadopted");
+  assert.equal(bounded.parked("unadopted"), false);
+  await unadopted;
+
+  // OmO reads a young child's idle only once the child is `minTaskMs` old; the claim bound follows.
+  const young = new IdleHolds({ claimMs: 20, notifyMs: 1, minTaskMs: 50 });
+  const adopted = Date.now();
+  young.adopt("young", "parent");
+  await young.park("young");
+  assert.ok(Date.now() - adopted >= 50, "the young child's hold lasted until OmO reads its idle");
   return {
     turns: "passed",
     errors: "passed",
@@ -555,5 +767,12 @@ export async function verifyTurns(
     overridesAfterFailure: "passed",
     rejectedSwitch: "passed",
     backgroundWait: "passed",
+    idleHold: "passed",
+    idleHoldContinue: "passed",
+    idleHoldExpiry: "passed",
+    idleHoldGoal: "passed",
+    idleHoldUnmanaged: "passed",
+    idleHoldYoung: "passed",
+    parentNotice: "passed",
   } as const;
 }

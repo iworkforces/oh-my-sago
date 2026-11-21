@@ -61,6 +61,33 @@ with OpenCode v2; the bridge does not implement another authentication system.
   keeps reporting the session busy until it goes idle with none of its own work
   left. Otherwise OmO would complete a background task early, then abort and
   delete its session while the subagent was still working.
+- OpenCode reports a finished subagent to its parent by itself, and that report
+  wakes an idle parent at once. OmO's background task notice would then find the
+  parent busy and wait for that turn to end, for up to a minute. So when a child
+  session that OmO created goes idle while its parent is idle, omsago sends OmO
+  the child's `session.idle` and `idle` status first and holds the child's turn
+  open. OmO completes the task by aborting the child, which answers `false` and
+  leaves the turn alone, then prompts the parent with its notice. That prompt
+  ends the hold, so the parent wakes to OmO's notice with OpenCode's report right
+  behind it. If OmO does not abort the child within 1 second of that idle, or
+  does not prompt the parent within 3 seconds of the abort, the turn ends as
+  usual. OmO reads the idle of a task younger than 5 seconds only once the task
+  is 5 seconds old, so for such a task the 1 second starts then. Input that
+  reaches the held child continues the same turn, and the child reports busy
+  again. A child with an active `/goal` is not held, because the goal can
+  continue its turn.
+- When OmO aborts a child it created while the child's root parent is busy, the
+  parent reports `idle` to OmO until OmO's notice reaches it, for up to 3
+  seconds. OmO then sends the notice at once instead of waiting for the parent's
+  turn to end, and OpenCode steers it into that turn. This also covers a child
+  that finishes while its parent is busy with another child's report. An abort
+  from the parent's own work, such as a synchronous `task` collecting its
+  result, leaves the parent's status alone, and a parent still running its own
+  background work keeps reporting busy.
+- OpenCode also reports the children of OmO's synchronous `task` and `look_at`,
+  whose tool result already gave the parent the child's answer. omsago leaves
+  such a report out of the parent's model requests, unless it alone started the
+  turn. It stays in the session history.
 - Native compaction start and failure reach OmO as
   `session.compaction.started` and `session.compaction.failed`. OmO's model
   fallback uses them to hold its timeout and error handling while a compaction
@@ -125,6 +152,13 @@ OmO itself still does not see these fields. It does not use your formatters for
 its own edits, and does not read the skill sources you declare in
 configuration. Put the equivalent setting in OmO's own configuration when you
 want OmO itself to follow it.
+
+OmO's toasts carry no session, so omsago names the session whose OmO hook
+requested one, and the TUI shows a toast from a session that is not open with
+that session's title or an offer to open it. A toast from OmO work that outlives
+the hook which started it, such as a timer or a background-task poller, names no
+session: one OmO poller serves every session's background tasks, so its toasts
+cannot be traced to the right one.
 
 OmO keeps some clients in module-level state that the most recently started
 instance replaces, including the client behind its session tools and its

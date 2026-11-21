@@ -2,6 +2,7 @@ import { Model, type Plugin } from "@opencode/plugin";
 import type { SessionContext, SessionRequest } from "@opencode/plugin/promise/session";
 import type { Hooks } from "@opencode-ai/plugin";
 import type { ClientSessionState, Turn } from "../client/state.js";
+import { forSession } from "../client/toast-session.js";
 import { ContentKind, SessionRequestKind } from "../enums.js";
 import { offersVariant, requestContext } from "./model.js";
 import { hideMarkers, markerMetadata } from "./markers.js";
@@ -45,13 +46,15 @@ export async function registerSessions(
   };
   stack.defer(
     (
-      await context.session.hook("prompt", async (event) => {
-        await transformPrompt(context, event, hooks);
-        const { text, markers } = hideMarkers(event.prompt.text);
-        if (markers.length === 0) return;
-        event.prompt.text = text;
-        event.metadata = { ...event.metadata, [markerMetadata]: markers };
-      })
+      await context.session.hook("prompt", (event) =>
+        forSession(event.sessionID, async () => {
+          await transformPrompt(context, event, hooks);
+          const { text, markers } = hideMarkers(event.prompt.text);
+          if (markers.length === 0) return;
+          event.prompt.text = text;
+          event.metadata = { ...event.metadata, [markerMetadata]: markers };
+        }),
+      )
     ).dispose,
   );
   stack.defer(
@@ -101,29 +104,48 @@ export async function registerSessions(
   };
   // Only a primary request's own `context` hook takes the turn its model resolution recorded.
   stack.defer(
-    (await context.session.hook("context", (event) => primary(event, state.take(event.sessionID))))
-      .dispose,
+    (
+      await context.session.hook("context", (event) =>
+        forSession(event.sessionID, () => primary(event, state.take(event.sessionID))),
+      )
+    ).dispose,
   );
-  stack.defer((await context.session.hook("generate", (event) => primary(event))).dispose);
-  stack.defer((await context.session.hook("title", request)).dispose);
   stack.defer(
     (
-      await context.session.hook("compaction", async (event) => {
-        await primary(event);
-        const output: { context: string[]; prompt?: string } = { context: [] };
-        await hooks["experimental.session.compacting"]?.({ sessionID: event.sessionID }, output);
-        if (output.prompt !== undefined)
-          event.system = [{ type: ContentKind.Text, text: output.prompt }];
-        event.system.push(...output.context.map((text) => ({ type: ContentKind.Text, text })));
-      })
+      await context.session.hook("generate", (event) =>
+        forSession(event.sessionID, () => primary(event)),
+      )
+    ).dispose,
+  );
+  stack.defer(
+    (
+      await context.session.hook("title", (event) =>
+        forSession(event.sessionID, () => request(event)),
+      )
+    ).dispose,
+  );
+  stack.defer(
+    (
+      await context.session.hook("compaction", (event) =>
+        forSession(event.sessionID, async () => {
+          await primary(event);
+          const output: { context: string[]; prompt?: string } = { context: [] };
+          await hooks["experimental.session.compacting"]?.({ sessionID: event.sessionID }, output);
+          if (output.prompt !== undefined)
+            event.system = [{ type: ContentKind.Text, text: output.prompt }];
+          event.system.push(...output.context.map((text) => ({ type: ContentKind.Text, text })));
+        }),
+      )
     ).dispose,
   );
   stack.defer(
     (
       await context.session.hook("model.request", async (event) => {
-        if (hooks["chat.headers"] === undefined) return;
+        const headers = hooks["chat.headers"];
+        if (headers === undefined) return;
         const output = { headers: { ...event.headers } };
-        await hooks["chat.headers"](await requestContext(context, event), output);
+        const input = await requestContext(context, event);
+        await forSession(event.sessionID, () => headers(input, output));
         event.headers = output.headers;
       })
     ).dispose,

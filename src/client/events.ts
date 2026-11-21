@@ -1,14 +1,23 @@
 import { setTimeout as sleep } from "node:timers/promises";
-import type { Plugin } from "@opencode/plugin";
+import { type Plugin, Rpc } from "@opencode/plugin";
 import type { OpenCodeEvent, SessionInfo, SessionMessageInfo } from "@opencode/client";
 import type { SelectedEvent } from "@opencode/client/promise/api";
 import type { Event, EventTodoUpdated, SessionMessagesResponse } from "@opencode-ai/sdk";
 import type { Todo } from "@opencode-ai/sdk/v2";
-import { ErrorName, LegacyEventType, SessionEventType, SessionStatusKind } from "../enums.js";
+import { z } from "zod";
+import {
+  ErrorName,
+  GoalStatus,
+  LegacyEventType,
+  SessionEventType,
+  SessionStatusKind,
+  goalStatuses,
+} from "../enums.js";
 import { BridgeError, assertNever } from "./errors.js";
 import { legacyError, legacyMessages } from "./messages.js";
 import {
   type BackgroundWaits,
+  type IdleHolds,
   type SessionRetries,
   isBusy,
   legacySession,
@@ -16,6 +25,7 @@ import {
 } from "./sessions.js";
 import { abortedBy, raceAbort } from "./signal.js";
 import type { ClientSessionState } from "./state.js";
+import { forSession } from "./toast-session.js";
 import { recordTodos } from "./todos.js";
 
 const types = [
@@ -67,6 +77,18 @@ const passive: ReadonlySet<NativeEvent["type"]> = new Set([
   SessionEventType.ToolProgress,
 ]);
 
+/** The part of OpenCode's `/goal` RPC the bridge reads. */
+const goalRpc = Rpc.define({
+  id: "opencode.goal",
+  methods: {
+    get: {
+      input: z.object({ sessionID: z.string() }),
+      output: z.object({ status: z.enum(goalStatuses) }).nullable(),
+    },
+  },
+  events: {},
+});
+
 /** Delay before resubscribing after the native stream fails or ends, doubled per failed attempt. */
 const reconnectDelay = { initialMs: 100, maxMs: 5_000 } as const;
 
@@ -87,7 +109,9 @@ interface Connection {
 /** `seed` loads the initial snapshots silently; a resync announces what a gap before `connection` hid. */
 const seed = Symbol("seed");
 type Resync = { readonly connection: Connection };
-type Queued = NativeEvent | typeof seed | Resync;
+/** A held child's idle, announced before its turn ends; see `IdleHolds`. */
+type Early = { readonly early: string };
+type Queued = NativeEvent | typeof seed | Resync | Early;
 
 /**
  * v1 todos carry no `id`; OmO keys them by content and priority. The legacy SDK defines no
@@ -118,6 +142,7 @@ export function clientEvents(
   context: Plugin.Context,
   retries: SessionRetries,
   waits: BackgroundWaits,
+  holds: IdleHolds,
   state: ClientSessionState,
   bounds: Partial<EventBounds> = {},
 ): ClientEvents {
@@ -148,6 +173,7 @@ export function clientEvents(
     foreign.delete(sessionID);
     retries.clear(sessionID);
     waits.delete(sessionID);
+    holds.delete(sessionID);
     state.delete(sessionID);
   };
   /** Stops serving a session that belongs to another location, forgetting it if it moved away. */
@@ -177,20 +203,18 @@ export function clientEvents(
       if (stopping !== undefined) throw new BridgeError(409, "The client bridge is stopped");
       if (running !== undefined)
         throw new BridgeError(409, "The client bridge event subscription already started");
-      // OpenCode runs this just before the session's `session.execution.succeeded`.
-      const idleHook = await context.session.hook("experimental.idle", (event) => {
-        waits.record(event);
-      });
       const run = new AbortController();
       const signal = AbortSignal.any([controller.signal, run.signal]);
       const options = { signal };
       const ready = Promise.withResolvers<void>();
       const stopped = (error: unknown): boolean => abortedBy(signal, error);
-      const emit = async (event: LegacyEvent): Promise<void> => {
+      const emit = async (sessionID: string, event: LegacyEvent): Promise<void> => {
         // Once stopped, no handler starts: the rest of a batch, a resync or the seed unwinds here.
         signal.throwIfAborted();
         try {
-          await hooks.event?.({ event });
+          await forSession(sessionID, async () => {
+            await hooks.event?.({ event });
+          });
         } catch (error) {
           if (stopped(error)) throw error;
           console.error("Client bridge event handler failed", { type: event.type, error });
@@ -212,14 +236,17 @@ export function clientEvents(
         for (const message of current) {
           const old = previous.find((entry) => entry.info.id === message.info.id);
           if (JSON.stringify(old?.info) !== JSON.stringify(message.info))
-            await emit({
+            await emit(session.id, {
               type: LegacyEventType.MessageUpdated,
               properties: { info: message.info },
             });
           for (const part of message.parts) {
             const prior = old?.parts.find((entry) => entry.id === part.id);
             if (JSON.stringify(prior) !== JSON.stringify(part))
-              await emit({ type: LegacyEventType.MessagePartUpdated, properties: { part } });
+              await emit(session.id, {
+                type: LegacyEventType.MessagePartUpdated,
+                properties: { part },
+              });
           }
         }
         messages.set(session.id, current);
@@ -229,7 +256,7 @@ export function clientEvents(
         forget(sessionID);
         // Only another location's sessions go unobserved, and their deletion is not ours to announce.
         if (session === undefined) return;
-        await emit({
+        await emit(sessionID, {
           type: LegacyEventType.SessionDeleted,
           properties: { info: legacySession(session, context.app.version) },
         });
@@ -317,12 +344,12 @@ export function clientEvents(
         const flush = async (): Promise<void> => {
           for (const { sessionID, event } of pending.splice(0)) {
             await diff(sessionID);
-            await emit(event);
+            await emit(sessionID, event);
           }
         };
-        const now = async (legacy: LegacyEvent): Promise<void> => {
+        const now = async (sessionID: string, legacy: LegacyEvent): Promise<void> => {
           await flush();
-          await emit(legacy);
+          await emit(sessionID, legacy);
         };
         for (const event of events) {
           const { sessionID } = event.data;
@@ -337,11 +364,13 @@ export function clientEvents(
             const { session, records } = snapshot;
             const settle = async (error?: LegacyEvent): Promise<void> => {
               retries.clear(sessionID);
+              const early = holds.takeAnnounced(sessionID);
               const announced = resynced.get(sessionID);
               resynced.delete(sessionID);
-              if (error !== undefined) await now(error);
-              if (announced !== undefined && announced === session.time.idle) return;
-              await now(status(sessionID, SessionStatusKind.Idle));
+              if (error !== undefined) await now(sessionID, error);
+              if (early) settled.set(sessionID, session.time.idle);
+              if (early || (announced !== undefined && announced === session.time.idle)) return;
+              await now(sessionID, status(sessionID, SessionStatusKind.Idle));
               pending.push({
                 sessionID,
                 event: { type: LegacyEventType.SessionIdle, properties: { sessionID } },
@@ -350,7 +379,7 @@ export function clientEvents(
             };
             switch (event.type) {
               case SessionEventType.Created:
-                await now({
+                await now(sessionID, {
                   type: LegacyEventType.SessionCreated,
                   properties: { info: legacySession(session, context.app.version) },
                 });
@@ -363,14 +392,14 @@ export function clientEvents(
               case SessionEventType.Permissions:
               case SessionEventType.Archived:
               case SessionEventType.Unarchived:
-                await now({
+                await now(sessionID, {
                   type: LegacyEventType.SessionUpdated,
                   properties: { info: legacySession(session, context.app.version) },
                 });
                 break;
               case SessionEventType.ExecutionStarted:
                 resynced.delete(sessionID);
-                await now(status(sessionID, SessionStatusKind.Busy));
+                await now(sessionID, status(sessionID, SessionStatusKind.Busy));
                 break;
               case SessionEventType.ExecutionFailed:
                 waits.delete(sessionID);
@@ -400,29 +429,32 @@ export function clientEvents(
                   next: event.data.at,
                 };
                 retries.set(sessionID, retry);
-                await now({
+                await now(sessionID, {
                   type: LegacyEventType.SessionStatus,
                   properties: { sessionID, status: retry },
                 });
                 break;
               }
-              case SessionEventType.StepStarted:
-                if (retries.clear(sessionID)) await now(status(sessionID, SessionStatusKind.Busy));
+              case SessionEventType.StepStarted: {
+                const retried = retries.clear(sessionID);
+                if (holds.ranOn(sessionID) || retried)
+                  await now(sessionID, status(sessionID, SessionStatusKind.Busy));
                 break;
+              }
               case SessionEventType.ToolSuccess: {
                 const todos = await raceAbort(
                   signal,
                   recordTodos(context, sessionID, event.data, records, options),
                 );
                 if (todos !== undefined)
-                  await now({
+                  await now(sessionID, {
                     type: LegacyEventType.TodoUpdated,
                     properties: { sessionID, todos },
                   });
                 break;
               }
               case SessionEventType.CompactionStarted:
-                await now({
+                await now(sessionID, {
                   type: LegacyEventType.SessionCompactionStarted,
                   properties: { sessionID },
                 });
@@ -488,17 +520,43 @@ export function clientEvents(
         sessions.set(session.id, session);
         const info = legacySession(session, context.app.version);
         if (known === undefined)
-          await emit({ type: LegacyEventType.SessionCreated, properties: { info } });
+          await emit(session.id, { type: LegacyEventType.SessionCreated, properties: { info } });
         else if (JSON.stringify(legacySession(known, context.app.version)) !== JSON.stringify(info))
-          await emit({ type: LegacyEventType.SessionUpdated, properties: { info } });
+          await emit(session.id, { type: LegacyEventType.SessionUpdated, properties: { info } });
         if (isBusy(session) && (known === undefined || !isBusy(known)))
-          await emit(status(session.id, SessionStatusKind.Busy));
+          await emit(session.id, status(session.id, SessionStatusKind.Busy));
         await emitMessages(session, records);
         if (!finished) return;
         settled.set(session.id, idle);
         resynced.set(session.id, idle);
-        await emit(status(session.id, SessionStatusKind.Idle));
-        await emit({ type: LegacyEventType.SessionIdle, properties: { sessionID: session.id } });
+        if (holds.takeAnnounced(session.id)) return;
+        await emit(session.id, status(session.id, SessionStatusKind.Idle));
+        await emit(session.id, {
+          type: LegacyEventType.SessionIdle,
+          properties: { sessionID: session.id },
+        });
+      };
+
+      /** Announces a held child's idle ahead of the event that ends its turn. */
+      const announceHeld = async (sessionID: string): Promise<void> => {
+        if (!holds.parked(sessionID)) return;
+        try {
+          const session = await raceAbort(signal, context.session.get({ sessionID }, options));
+          const records = await raceAbort(signal, context.session.context({ sessionID }, options));
+          // A hold released meanwhile ends its turn as usual, idle and all.
+          if (!holds.parked(sessionID)) return;
+          const ranOn = holds.announce(sessionID);
+          sessions.set(sessionID, session);
+          if (ranOn) await emit(sessionID, status(sessionID, SessionStatusKind.Busy));
+          await emitMessages(session, records);
+          await emit(sessionID, status(sessionID, SessionStatusKind.Idle));
+          await emit(sessionID, { type: LegacyEventType.SessionIdle, properties: { sessionID } });
+        } catch (error) {
+          if (stopped(error)) throw error;
+          // The turn's own end then announces its idle.
+          holds.delete(sessionID);
+          console.error("Client bridge could not announce a held idle", { sessionID, error });
+        }
       };
 
       const reconcile = async (announce: boolean): Promise<void> => {
@@ -612,6 +670,9 @@ export function clientEvents(
                   console.error("Client bridge could not resync; reconnecting", error);
                   item.connection.controller.abort(error);
                 }
+              } else if ("early" in item) {
+                await deliver(events.splice(0));
+                await announceHeld(item.early);
               } else events.push(item);
             }
             await deliver(events);
@@ -622,6 +683,36 @@ export function clientEvents(
           ready.reject(new BridgeError(409, "The client bridge stopped before it started"));
         }
       };
+
+      /**
+       * Holds the turn of a child OmO created at its idle while its parent is idle, and has the event
+       * loop announce that idle at once; see `IdleHolds`. Never rejects, since a failing idle hook
+       * fails the child's execution.
+       */
+      const hold = async (sessionID: string): Promise<void> => {
+        const parentID = holds.parentOf(sessionID);
+        if (parentID === undefined || waits.has(sessionID)) return;
+        try {
+          const [parent, goal] = await Promise.all([
+            raceAbort(signal, context.session.get({ sessionID: parentID }, options)),
+            raceAbort(signal, context.rpc(goalRpc).get({ sessionID }, options)),
+          ]);
+          // An active goal's own idle hook may run the turn on, which this hook cannot see.
+          if (goal?.status === GoalStatus.Active) return;
+          if (!owns(parent) || isBusy(parent) || waits.has(parentID)) return;
+          const held = holds.park(sessionID);
+          enqueue({ early: sessionID });
+          await raceAbort(signal, held);
+        } catch (error) {
+          if (!stopped(error))
+            console.error("Client bridge could not hold a child's idle", { sessionID, error });
+        }
+      };
+      // OpenCode runs this just before the session's `session.execution.succeeded`, which waits for it.
+      const idleHook = await context.session.hook("experimental.idle", async (event) => {
+        waits.record(event);
+        await hold(event.sessionID);
+      });
 
       // A task that dies unexpectedly stops the other, so the bridge never runs half-deaf.
       const guard = (task: Promise<void>): Promise<void> =>

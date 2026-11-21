@@ -81,17 +81,18 @@ test("TUI setup waits for a session event before showing a toast", async () => {
 });
 
 test.each(["session.created", "session.execution.succeeded"])(
-  "TUI shows the success toast on %s",
+  "TUI shows the success toast for the session of %s",
   async (type) => {
     await using host = await load();
 
-    host.events.emit(type);
+    host.events.emit(type, { data: { sessionID: "ses_event" } });
 
     expect(host.toasts).toEqual([
       {
         message: "Sago is now on Steroids, oMoMoMoMo...",
         variant: "success",
         duration: 5000,
+        sessionID: "ses_event",
       },
     ]);
   },
@@ -124,12 +125,24 @@ test("TUI forwards each OmO toast event to the toast API unchanged", async () =>
   await using host = await load();
 
   host.rpc.emit("toast", {
-    data: { title: "Background task", message: "done", variant: "info", duration: 3000 },
+    data: {
+      title: "Background task",
+      message: "done",
+      variant: "info",
+      duration: 3000,
+      sessionID: "ses_hook",
+    },
   });
   host.rpc.emit("toast", { data: { message: "fallback model", variant: "warning" } });
 
   expect(host.toasts).toEqual([
-    { title: "Background task", message: "done", variant: "info", duration: 3000 },
+    {
+      title: "Background task",
+      message: "done",
+      variant: "info",
+      duration: 3000,
+      sessionID: "ses_hook",
+    },
     { message: "fallback model", variant: "warning" },
   ]);
 });

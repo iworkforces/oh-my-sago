@@ -6,6 +6,7 @@ import { CompatibilityError, errorMessage } from "./value.js";
 import { promptInput } from "./prompt.js";
 import { PartKind } from "../enums.js";
 import { applySwitch, resolveSwitch } from "../session/model.js";
+import { forSession } from "../client/toast-session.js";
 
 /** Parses a command's `model` once; a bad reference fails that command's runs, not registration. */
 function commandModel(name: string, model: string | undefined): Model.Ref | Error | undefined {
@@ -56,10 +57,12 @@ export async function registerCommands(
               },
             ],
           };
-          await hooks["command.execute.before"]?.(
-            { command: name, sessionID: event.sessionID, arguments: argumentsText },
-            output,
-          );
+          await forSession(event.sessionID, async () => {
+            await hooks["command.execute.before"]?.(
+              { command: name, sessionID: event.sessionID, arguments: argumentsText },
+              output,
+            );
+          });
           const text = output.parts
             .map((part) => {
               if (part.type !== PartKind.Text)
