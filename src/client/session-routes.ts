@@ -22,7 +22,7 @@ export function sessionRoutes(
   waits: BackgroundWaits,
   holds: IdleHolds,
 ) {
-  const prompt = promptRoutes(context, holds);
+  const prompt = promptRoutes(context, state, holds);
   /**
    * OmO notifies a background task's parent once it completes or cancels the task by aborting the
    * child, and waits while the parent is busy, so a root parent reports idle for that notice. Not

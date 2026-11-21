@@ -429,12 +429,12 @@ const prompting = (native: RequestMessage): boolean => native.role !== MessageRo
 /**
  * Shows the model OmO's internal prompts as written for it: without OmO's markers, and without a
  * `<system-reminder>` block the model was already shown. OmO records a background notice without a
- * reply while its parent looks busy, then sends the same notice to wake the parent; v2 holds the
- * first in the session inbox until that wake, so both reach the model side by side. OmO also sends a
- * notice again, merged with any newer one, when no assistant output shows up within seconds of the
- * first send, although the model may have read and answered it by then. So a block is dropped when
- * an earlier user message of its turn carries it, or when OmO repeats it from an earlier turn; a
- * user's own message keeps what it quotes. OpenCode reports a child's answer to its parent as the
+ * reply while its parent looks busy, then sends the same notice to wake the parent; when another
+ * wake took the first in, both reach the model side by side. OmO also sends a notice again, merged
+ * with any newer one, when no assistant output shows up within seconds of the first send, although
+ * the model may have read and answered it by then. So a block is dropped when an earlier user
+ * message of its turn carries it, or when OmO repeats it from an earlier turn; a user's own message
+ * keeps what it quotes. OpenCode reports a child's answer to its parent as the
  * child's turn ends, also when a tool of the parent already returned that answer, so that report is
  * dropped too. A message left empty is dropped, unless that leaves its turn with nothing to answer:
  * the repeat alone is then asking, and the turn keeps it.

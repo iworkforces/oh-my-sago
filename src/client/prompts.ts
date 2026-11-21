@@ -13,12 +13,23 @@ import {
 import { body, promptBody, summarizeBody } from "./requests.js";
 import type { IdleHolds } from "./sessions.js";
 import { abortedBy } from "./signal.js";
-import { clientMetadata, promptOverrides } from "./state.js";
+import { type ClientSessionState, clientMetadata, promptOverrides } from "./state.js";
 import { nativeAction } from "../domains/permissions.js";
 import { metadata } from "../domains/value.js";
+import { hideMarkers } from "../session/markers.js";
 import { applySwitch, resolveSwitch } from "../session/model.js";
 
-export function promptRoutes(context: Plugin.Context, holds: IdleHolds) {
+export function promptRoutes(context: Plugin.Context, state: ClientSessionState, holds: IdleHolds) {
+  /**
+   * The id of the prompt without a reply that a reply prompt repeats, while it is still in the
+   * session inbox, so the repeat wakes the session for it instead of admitting a second copy.
+   */
+  const waiting = async (sessionID: string, text: string, options: { signal: AbortSignal }) => {
+    const earlier = state.unansweredID(sessionID, text);
+    if (earlier === undefined) return undefined;
+    const records = await context.session.context({ sessionID }, options);
+    return records.some((record) => record.id === earlier) ? undefined : earlier;
+  };
   return async (request: Request, sessionID: string, operation: string): Promise<Response> => {
     const options = { signal: request.signal };
     if (operation === SessionOperation.Summarize) {
@@ -154,19 +165,29 @@ export function promptRoutes(context: Plugin.Context, holds: IdleHolds) {
           assertNever(part);
       }
     }
+    const text = texts.join("\n");
+    const unmarked = hideMarkers(text).text;
+    const repeated =
+      input.noReply === true || input.messageID !== undefined || files.length + agents.length > 0
+        ? undefined
+        : await waiting(sessionID, unmarked, options);
+    // OpenCode takes a prompt whose id it already holds as that prompt, and only wakes the session.
+    const id = repeated ?? input.messageID;
     const admission = await context.session.prompt(
       {
         sessionID,
-        text: texts.join("\n"),
+        text,
         files,
         agents,
-        ...(input.messageID === undefined ? {} : { id: input.messageID }),
+        ...(id === undefined ? {} : { id }),
         metadata: { [clientMetadata]: metadata(overrides) },
         resume: input.noReply !== true,
       },
       options,
     );
-    holds.prompted(sessionID, texts.join("\n"));
+    if (input.noReply === true) state.unanswered(sessionID, unmarked, admission.id);
+    else state.answered(sessionID);
+    holds.prompted(sessionID, text);
     if (operation === SessionOperation.PromptAsync) return new Response(null, { status: 204 });
     await context.session.wait({ sessionID }, options);
     const session = await context.session.get({ sessionID }, options);

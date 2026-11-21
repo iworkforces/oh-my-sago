@@ -56,13 +56,38 @@ export type Turn = { readonly overrides: PromptOverrides | undefined };
  * Hands each primary request the prompt overrides stored on the latest user record that existed
  * when its model was resolved. `experimental.model.resolve` records them and the same request's
  * `context` hook takes them, so no turn outlives the request that read it. Parent session hooks
- * apply them after their own legacy transformations.
+ * apply them after their own legacy transformations. Also keeps each session's prompts admitted
+ * without a reply, which OmO may send again to wake the session.
  */
 export class ClientSessionState {
   readonly #resolved = new Map<string, Turn>();
+  readonly #unanswered = new Map<string, Map<string, string>>();
 
   delete(sessionID: string): void {
     this.#resolved.delete(sessionID);
+    this.#unanswered.delete(sessionID);
+  }
+
+  /**
+   * Keeps the id of a prompt admitted without a reply under its text. OmO records a background
+   * notice that way while the parent looks busy, then sends the same notice again to wake the
+   * parent, possibly after other prompts without a reply. v2 keeps each in the session inbox until
+   * a wake.
+   */
+  unanswered(sessionID: string, text: string, id: string): void {
+    const prompts = this.#unanswered.get(sessionID) ?? new Map<string, string>();
+    prompts.set(text, id);
+    this.#unanswered.set(sessionID, prompts);
+  }
+
+  /** The id of the session's prompt admitted without a reply with this text, if any. */
+  unansweredID(sessionID: string, text: string): string | undefined {
+    return this.#unanswered.get(sessionID)?.get(text);
+  }
+
+  /** Forgets the session's prompts admitted without a reply, which a wake takes in. */
+  answered(sessionID: string): void {
+    this.#unanswered.delete(sessionID);
   }
 
   /** Reads the latest user record for a primary request and keeps its overrides for `take`. */
