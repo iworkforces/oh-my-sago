@@ -161,10 +161,7 @@ export async function verifyTurns(
   assert.equal(read.tool, "read");
   assert.equal(read.state.status, ToolStateStatus.Completed, JSON.stringify(read));
   assert.equal(read.state.input["filePath"], "client.txt");
-  assert.ok(
-    read.state.status === ToolStateStatus.Completed &&
-      read.state.output.includes("client fixture content"),
-  );
+  assert.ok(read.state.output.includes("client fixture content"));
 
   const compaction = log.mark();
   const compacted = await client.session.summarize({
@@ -208,7 +205,7 @@ export async function verifyTurns(
       (record) =>
         record.type === RecordType.Compaction &&
         record.status === CompactionStatus.Completed &&
-        record.summary?.includes("fixture summary"),
+        record.summary.includes("fixture summary"),
     ),
   );
   const invalid = await create();

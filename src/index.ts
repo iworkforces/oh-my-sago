@@ -6,7 +6,7 @@ import { registerSessions } from "./session/index.js";
 import { toastRpc } from "./toast.js";
 import { registerUserDiscovery } from "./user-discovery.js";
 
-export default Plugin.define({
+const plugin: Plugin.Plugin = Plugin.define({
   id: "omsago",
   async setup(context) {
     await using stack = new AsyncDisposableStack();
@@ -30,3 +30,5 @@ export default Plugin.define({
     return () => owned.disposeAsync();
   },
 });
+
+export default plugin;

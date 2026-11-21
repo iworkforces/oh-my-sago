@@ -4,6 +4,7 @@
     "noEmit": false,
     "noEmitOnError": true,
     "declaration": true,
+    "isolatedDeclarations": true,
     "rootDir": "src",
     "outDir": "dist"
   },

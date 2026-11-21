@@ -8,7 +8,20 @@ import { type permission, promptBody } from "./requests.js";
 
 export const clientMetadata = "omsago.client";
 
-export const promptOverrides = promptBody
+export const promptOverrides: z.ZodObject<
+  Pick<
+    (typeof promptBody)["shape"],
+    | "system"
+    | "tools"
+    | "variant"
+    | "temperature"
+    | "topP"
+    | "topK"
+    | "maxOutputTokens"
+    | "options"
+    | "params"
+  >
+> = promptBody
   .pick({
     system: true,
     tools: true,

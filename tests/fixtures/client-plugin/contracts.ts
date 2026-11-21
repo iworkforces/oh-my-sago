@@ -46,11 +46,11 @@ export async function verifyClient(fixture: {
       input.client.app.skills(),
     ]);
     assert.equal(project.data?.id, fixture.context.location.project.id);
-    assert.equal(project.data?.worktree, fixture.context.location.project.directory);
+    assert.equal(project.data.worktree, fixture.context.location.project.directory);
     assert.ok(config.data?.agent?.["build"] !== undefined);
     assert.ok(providers.data?.connected.includes("omsago-test") === true);
     assert.equal(
-      providers.data?.all.find((provider) => provider.id === "omsago-test")?.models["scripted"]
+      providers.data.all.find((provider) => provider.id === "omsago-test")?.models["scripted"]
         ?.tool_call,
       true,
     );
@@ -232,7 +232,7 @@ export async function verifyClient(fixture: {
       assert.ok(models !== undefined);
       const { "bad-date": degraded, ...intact } = models;
       assert.equal(degraded?.release_date, "");
-      assert.equal(degraded?.name, valid.name);
+      assert.equal(degraded.name, valid.name);
       assert.deepEqual(intact, baselineModels);
     } finally {
       await bridge.close();

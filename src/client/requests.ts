@@ -1,15 +1,81 @@
-import { PartKind, permissionEffects } from "../enums.js";
+import { PartKind, type PermissionEffect, permissionEffects } from "../enums.js";
 import { z } from "zod";
 import { json } from "../domains/value.js";
 
-export const model = z.object({ providerID: z.string(), modelID: z.string() }).strict();
-export const nativeModel = z
+type OptionalString = z.ZodOptional<z.ZodString>;
+type OptionalNumber = z.ZodOptional<z.ZodNumber>;
+type OptionalBoolean = z.ZodOptional<z.ZodBoolean>;
+type ModelSchema = z.ZodObject<{ providerID: z.ZodString; modelID: z.ZodString }, z.core.$strict>;
+type NativeModelSchema = z.ZodObject<
+  { providerID: z.ZodString; id: z.ZodString; variant: OptionalString },
+  z.core.$strict
+>;
+type PermissionSchema = z.ZodObject<
+  {
+    permission: z.ZodString;
+    pattern: z.ZodString;
+    action: z.ZodEnum<{ [Effect in PermissionEffect]: Effect }>;
+  },
+  z.core.$strict
+>;
+type MentionSchema = z.ZodObject<{
+  start: z.ZodNumber;
+  end: z.ZodNumber;
+  value: OptionalString;
+}>;
+type PartSchema = z.ZodDiscriminatedUnion<
+  [
+    z.ZodObject<
+      {
+        type: z.ZodLiteral<typeof PartKind.Text>;
+        id: OptionalString;
+        text: z.ZodString;
+        synthetic: OptionalBoolean;
+        ignored: OptionalBoolean;
+      },
+      z.core.$strict
+    >,
+    z.ZodObject<
+      {
+        type: z.ZodLiteral<typeof PartKind.File>;
+        id: OptionalString;
+        mime: z.ZodString;
+        url: z.ZodString;
+        filename: OptionalString;
+        source: z.ZodOptional<z.ZodJSONSchema>;
+      },
+      z.core.$strict
+    >,
+    z.ZodObject<
+      {
+        type: z.ZodLiteral<typeof PartKind.Agent>;
+        id: OptionalString;
+        name: z.ZodString;
+        source: z.ZodOptional<MentionSchema>;
+      },
+      z.core.$strict
+    >,
+  ],
+  "type"
+>;
+
+const model: ModelSchema = z.object({ providerID: z.string(), modelID: z.string() }).strict();
+const nativeModel: NativeModelSchema = z
   .object({ providerID: z.string(), id: z.string(), variant: z.string().optional() })
   .strict();
-export const permission = z
+export const permission: PermissionSchema = z
   .object({ permission: z.string(), pattern: z.string(), action: z.enum(permissionEffects) })
   .strict();
-export const createBody = z
+export const createBody: z.ZodObject<
+  {
+    parentID: OptionalString;
+    title: OptionalString;
+    agent: OptionalString;
+    model: z.ZodOptional<NativeModelSchema>;
+    permission: z.ZodOptional<z.ZodArray<PermissionSchema>>;
+  },
+  z.core.$strict
+> = z
   .object({
     parentID: z.string().optional(),
     title: z.string().optional(),
@@ -18,15 +84,26 @@ export const createBody = z
     permission: z.array(permission).optional(),
   })
   .strict();
-export const updateBody = z
+export const updateBody: z.ZodObject<
+  {
+    title: OptionalString;
+    permission: z.ZodOptional<z.ZodArray<PermissionSchema>>;
+    time: z.ZodOptional<z.ZodObject<{ archived: OptionalNumber }, z.core.$strict>>;
+  },
+  z.core.$strict
+> = z
   .object({
     title: z.string().optional(),
     permission: z.array(permission).optional(),
     time: z.object({ archived: z.number().optional() }).strict().optional(),
   })
   .strict();
-const mention = z.object({ start: z.number(), end: z.number(), value: z.string().optional() });
-const part = z.discriminatedUnion("type", [
+const mention: MentionSchema = z.object({
+  start: z.number(),
+  end: z.number(),
+  value: z.string().optional(),
+});
+const part: PartSchema = z.discriminatedUnion("type", [
   z
     .object({
       type: z.literal(PartKind.Text),
@@ -55,7 +132,25 @@ const part = z.discriminatedUnion("type", [
     })
     .strict(),
 ]);
-export const promptBody = z
+export const promptBody: z.ZodObject<
+  {
+    messageID: OptionalString;
+    model: z.ZodOptional<ModelSchema>;
+    agent: OptionalString;
+    variant: OptionalString;
+    noReply: OptionalBoolean;
+    system: OptionalString;
+    tools: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodBoolean>>;
+    parts: z.ZodArray<PartSchema>;
+    temperature: OptionalNumber;
+    topP: OptionalNumber;
+    topK: OptionalNumber;
+    maxOutputTokens: OptionalNumber;
+    options: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodJSONSchema>>;
+    params: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodJSONSchema>>;
+  },
+  z.core.$strict
+> = z
   .object({
     messageID: z.string().optional(),
     model: model.optional(),
@@ -73,7 +168,10 @@ export const promptBody = z
     params: z.record(z.string(), z.json()).optional(),
   })
   .strict();
-export const summarizeBody = z
+export const summarizeBody: z.ZodObject<
+  { providerID: z.ZodString; modelID: z.ZodString; auto: OptionalBoolean },
+  z.core.$strict
+> = z
   .object({ providerID: z.string(), modelID: z.string(), auto: z.boolean().optional() })
   .strict();
 

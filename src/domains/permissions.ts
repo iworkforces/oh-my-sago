@@ -1,11 +1,17 @@
 import type { Agent } from "@opencode/plugin";
 import { z } from "zod";
-import { LegacyAction, NativeAction, permissionEffects } from "../enums.js";
+import { LegacyAction, NativeAction, type PermissionEffect, permissionEffects } from "../enums.js";
 
 export type NativePermission = Agent.Info["permissions"][number];
 
+type EffectSchema = z.ZodEnum<{ [Effect in PermissionEffect]: Effect }>;
 const effect = z.enum(permissionEffects);
-const rules = z.union([
+const rules: z.ZodUnion<
+  [
+    z.ZodPipe<EffectSchema, z.ZodTransform<{ "*": PermissionEffect }, PermissionEffect>>,
+    z.ZodRecord<z.ZodString, z.ZodUnion<[EffectSchema, z.ZodRecord<z.ZodString, EffectSchema>]>>,
+  ]
+> = z.union([
   effect.transform((value) => ({ "*": value })),
   z.record(z.string(), z.union([effect, z.record(z.string(), effect)])),
 ]);
